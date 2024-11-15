@@ -1,5 +1,23 @@
 services:
+  # Backend API service
   - type: web
-    name: flexhunt
-    buildCommand: npm run build
-    startCommand: node Backend/server.js
+    name: flexhunt-api
+    env: node
+    buildCommand: cd Backend && npm install && npm run build
+    startCommand: cd Backend && node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 5000
+
+  # Frontend web service
+  - type: web
+    name: flexhunt-frontend
+    env: static
+    buildCommand: cd frontend && npm install && npm run build
+    staticPublishPath: ./frontend/dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
