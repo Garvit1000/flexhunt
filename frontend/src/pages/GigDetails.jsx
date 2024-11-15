@@ -317,80 +317,57 @@ const createPaymentOrder = async () => {
 };
 
 // Update the PayPal button implementation
-const handleBuyNow = async () => {
-  if (!currentUser) {
-    setError('Please log in to purchase this gig');
-    return;
-  }
-
-  if (!paypalLoaded) {
-    setError('Payment system is still initializing. Please try again.');
-    return;
-  }
-
-  try {
-    const container = document.getElementById('paypal-button-container');
-    if (container) {
-      container.innerHTML = '';
+  const handleBuyNow = async () => {
+    if (!currentUser) {
+      setError('Please log in to purchase this gig');
+      return;
     }
 
-    window.paypal.Buttons({
-      createOrder: async () => {
-        try {
-          const orderId = await createPaymentOrder();
-          console.log('PayPal order created:', orderId);
-          return orderId;
-        } catch (err) {
-          console.error('Error in createOrder:', err);
-          setError(err.message || 'Failed to create payment order');
-          throw err;
-        }
-      },
-      onApprove: async (data, actions) => {
-        try {
-          const response = await fetch('https://www.flexhunt.co/api/capture-payment', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${await currentUser.getIdToken()}`
-            },
-            credentials: 'include',
-            body: JSON.stringify({
-              orderID: data.orderID
-            })
-          });
+    if (!paypalLoaded) {
+      setError('Payment system is still initializing. Please try again.');
+      return;
+    }
 
-          if (!response.ok) {
-            throw new Error('Payment capture failed');
-          }
-
-          const captureResult = await response.json();
-          console.log('Payment captured:', captureResult);
-
-          // Handle successful payment
-          navigate('/orders');
-        } catch (err) {
-          console.error('Payment capture error:', err);
-          setError(err.message || 'Failed to complete payment');
-        }
-      },
-      onError: (err) => {
-        console.error('PayPal error:', err);
-        setError('Payment failed. Please try again.');
+    try {
+      const container = document.getElementById('paypal-button-container');
+      if (container) {
+        container.innerHTML = '';
       }
-    }).render('#paypal-button-container');
-  } catch (err) {
-    console.error('Payment processing error:', err);
-    setError(err.message || 'Error processing payment');
-  }
-};
-            if (!captureResponse.ok) {
-              const errorData = await captureResponse.json();
-              throw new Error(errorData.message || 'Failed to capture payment');
+
+      window.paypal.Buttons({
+        createOrder: async () => {
+          try {
+            const orderId = await createPaymentOrder();
+            console.log('PayPal order created:', orderId);
+            return orderId;
+          } catch (err) {
+            console.error('Error in createOrder:', err);
+            setError(err.message || 'Failed to create payment order');
+            throw err;
+          }
+        },
+        onApprove: async (data, actions) => {  // Fixed: Added async here
+          try {
+            const response = await fetch('https://www.flexhunt.co/api/capture-payment', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${await currentUser.getIdToken()}`
+              },
+              credentials: 'include',
+              body: JSON.stringify({
+                orderID: data.orderID
+              })
+            });
+
+            if (!response.ok) {
+              throw new Error('Payment capture failed');
             }
 
-            const captureResult = await captureResponse.json();
-            
+            const captureResult = await response.json();
+            console.log('Payment captured:', captureResult);
+
+            // Update payment status in Firestore
             const db = getFirestore();
             const paymentsRef = collection(db, 'payments');
             const q = query(paymentsRef, where('paypalOrderId', '==', data.orderID));
@@ -399,21 +376,19 @@ const handleBuyNow = async () => {
             if (!querySnapshot.empty) {
               const paymentDoc = querySnapshot.docs[0];
               
-              // Only update with defined fields
               const updateData = {
                 status: captureResult.status || 'COMPLETED',
                 updatedAt: serverTimestamp(),
                 completedAt: serverTimestamp()
               };
               
-              // Only add captureId if it exists
               if (captureResult.captureId) {
                 updateData.captureId = captureResult.captureId;
               }
 
               await updateDoc(doc(db, 'payments', paymentDoc.id), updateData);
 
-              // Create order document only if payment is completed
+              // Create order if payment is completed
               if (captureResult.status === 'COMPLETED') {
                 await addDoc(collection(db, 'orders'), {
                   gigId: id,
@@ -434,7 +409,7 @@ const handleBuyNow = async () => {
                 });
               }
 
-              navigate(`/orders`);
+              navigate('/orders');
             }
           } catch (err) {
             console.error('Payment capture error:', err);
