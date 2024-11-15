@@ -10,7 +10,7 @@ const app = express();
 
 // Middleware
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'https://flexhunt.onrender.com',
+  origin: process.env.CLIENT_URL || 'https://www.flexhunt.co',
   credentials: true
 }));
 app.use(express.json());
