@@ -9,7 +9,10 @@ const { admin, db } = require('./config/firebase-config');
 const app = express();
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: process.env.CLIENT_URL || 'https://flexhunt.onrender.com',
+  credentials: true
+}));
 app.use(express.json());
 
 // PayPal Configuration
@@ -209,11 +212,11 @@ app.post('/api/dispute-payment', async (req, res) => {
 });
 if (process.env.NODE_ENV === 'production') {
   // Serve static files from the React frontend app
-  app.use(express.static(path.join(__dirname, '../frontend/build')));
+  app.use(express.static(path.join(__dirname, '../frontend/dist')));
 
   // Handle React routing, return all requests to React app
   app.get('*', function(req, res) {
-      res.sendFile(path.join(__dirname, '../frontend/build', '/frontend/index.html'));
+      res.sendFile(path.join(__dirname,  '../frontend/dist/index.html'));
   });
 }
 
