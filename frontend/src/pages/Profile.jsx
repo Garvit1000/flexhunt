@@ -117,7 +117,7 @@ const Profile = () => {
           <Briefcase size={20} className="mr-2" />
           View Jobs
         </Link>
-        <Link to="/https://flex-community.vercel.app/" className="bg-indigo-600 text-white px-6 py-3 rounded-md hover:bg-indigo-700 transition duration-300 flex items-center">
+        <Link to="https://flex-community.vercel.app/" className="bg-indigo-600 text-white px-6 py-3 rounded-md hover:bg-indigo-700 transition duration-300 flex items-center">
           <User size={20} className="mr-2" />
           Community Forum
         </Link>
