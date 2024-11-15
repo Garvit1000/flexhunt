@@ -228,64 +228,89 @@ const GigDetails = () => {
     
       
   const createPaymentOrder = async () => {
-    if (!currentUser || !gig) {
-      throw new Error('User or gig data is missing');
-    }
+  if (!currentUser || !gig) {
+    throw new Error('User or gig data is missing');
+  }
 
-    // Debug logging
-    console.log('Creating payment for gig:', {
-      price: gig.startingPrice,
-      providerId: gig.providerId,
-      title: gig.title,
-      fullGig: gig
+  try {
+    // Create local payment record first
+    const paymentId = await createLocalPaymentRecord();
+
+    // Make API request with proper error handling
+    const response = await fetch('https://www.flexhunt.co/api/create-payment', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${await currentUser.getIdToken()}`
+      },
+      body: JSON.stringify({
+        gigId: id,
+        paymentId: paymentId,
+        buyerId: currentUser.uid,
+        amount: gig.startingPrice
+      })
     });
 
-    // Validate required fields with detailed error message
-    const missingFields = [];
-    if (!gig.providerId) missingFields.push('providerId');
-    if (!gig.title) missingFields.push('title');
-    if (!gig.startingPrice) missingFields.push('startingPrice');
-
-    if (missingFields.length > 0) {
-      const errorMsg = `Missing required fields: ${missingFields.join(', ')}`;
-      console.error(errorMsg, gig);
-      throw new Error(errorMsg);
+    // Handle non-OK responses
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({
+        error: `HTTP error! status: ${response.status}`
+      }));
+      throw new Error(errorData.error || 'Failed to create PayPal order');
     }
 
-    const db = getFirestore();
-    
+    // Parse response carefully
+    let data;
     try {
-      const paymentData = {
-        gigId: id,
-        gigTitle: gig.title,
-        buyerId: currentUser.uid,
-        buyerEmail: currentUser.email,
-        buyerName: currentUser.displayName || 'Anonymous',
-        sellerId: gig.providerId,
-        sellerEmail: gig.providerEmail || '',
-        sellerName: gig.provider || 'Unknown Provider',
-        amount: Number(gig.startingPrice),
-        status: 'PENDING',
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        currency: 'USD',
-        paymentMethod: 'PAYPAL',
-        deliveryTime: gig.deliveryTime || '7 days',
-        category: gig.category || 'uncategorized'
-      };
-
-      // Log the payment data before creation
-      console.log('Creating payment with data:', paymentData);
-
-      const paymentDoc = await addDoc(collection(db, 'payments'), paymentData);
-      console.log('Payment document created with ID:', paymentDoc.id);
-
-      return paymentDoc.id;
+      data = await response.json();
     } catch (err) {
-      console.error('Error creating payment document:', err);
-      throw new Error(`Failed to create payment record: ${err.message}`);
+      throw new Error('Invalid response from server');
     }
+
+    // Validate response data
+    if (!data.orderID) {
+      throw new Error('No order ID received from server');
+    }
+
+    // Update payment record with PayPal order ID
+    const db = getFirestore();
+    await updateDoc(doc(db, 'payments', paymentId), {
+      paypalOrderId: data.orderID,
+      updatedAt: serverTimestamp()
+    });
+
+    return data.orderID;
+  } catch (err) {
+    console.error('Error creating order:', err);
+    throw new Error(`Payment creation failed: ${err.message}`);
+  }
+};
+
+// Helper function to create local payment record
+const createLocalPaymentRecord = async () => {
+  const db = getFirestore();
+  const paymentData = {
+    gigId: id,
+    gigTitle: gig.title,
+    buyerId: currentUser.uid,
+    buyerEmail: currentUser.email,
+    buyerName: currentUser.displayName || 'Anonymous',
+    sellerId: gig.providerId,
+    sellerEmail: gig.providerEmail || '',
+    sellerName: gig.provider || 'Unknown Provider',
+    amount: Number(gig.startingPrice),
+    status: 'PENDING',
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    currency: 'USD',
+    paymentMethod: 'PAYPAL',
+    deliveryTime: gig.deliveryTime || '7 days',
+    category: gig.category || 'uncategorized'
   };
+
+  const paymentDoc = await addDoc(collection(db, 'payments'), paymentData);
+  return paymentDoc.id;
+};
   const handleBuyNow = async () => {
     if (!currentUser) {
       setError('Please log in to purchase this gig');
