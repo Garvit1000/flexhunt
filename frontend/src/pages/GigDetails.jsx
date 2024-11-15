@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { z } from 'zod';
 import { 
   Card,
   CardHeader,
@@ -35,7 +36,6 @@ const GigDetails = () => {
   const { id } = useParams();
   const navigate = useNavigate();
   const { currentUser } = useAuth();
-  const { toast } = useToast();
   const [gig, setGig] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -44,195 +44,6 @@ const GigDetails = () => {
   const [chatOpen, setChatOpen] = useState(false);
   const [paypalLoaded, setPaypalLoaded] = useState(false);
   const [sendingMessage, setSendingMessage] = useState(false);
-
-  const createPaymentOrder = async () => {
-    if (!currentUser || !gig) {
-      throw new Error('Missing user or gig data');
-    }
-
-    try {
-      const token = await currentUser.getIdToken();
-      
-      const payload = {
-        gigId: id,
-        buyerId: currentUser.uid,
-        amount: parseFloat(gig.startingPrice),
-        currency: 'USD',
-        description: `Payment for ${gig.title}`
-      };
-
-      console.log('Sending payment creation request with payload:', payload);
-
-      const response = await fetch('https://www.flexhunt.co/api/create-payment', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        credentials: 'include',
-        body: JSON.stringify(payload)
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Server error response:', errorText);
-        throw new Error(`Payment creation failed: ${response.status} ${response.statusText}`);
-      }
-
-      let responseText;
-      try {
-        responseText = await response.text();
-        console.log('Raw server response:', responseText);
-      } catch (err) {
-        console.error('Error reading response:', err);
-        throw new Error('Failed to read server response');
-      }
-
-      let data;
-      try {
-        data = JSON.parse(responseText);
-        console.log('Parsed response data:', data);
-      } catch (err) {
-        console.error('JSON parse error:', err, 'Response text:', responseText);
-        throw new Error('Invalid JSON response from server');
-      }
-
-      if (!data || typeof data !== 'object') {
-        throw new Error('Invalid response format: expected object');
-      }
-
-      if (!data.orderID) {
-        throw new Error('Invalid response format: missing orderID');
-      }
-
-      return data.orderID;
-
-    } catch (err) {
-      console.error('Payment creation error:', err);
-      throw new Error(err.message || 'Failed to create payment');
-    }
-  };
-
-  const handleBuyNow = async () => {
-    if (!currentUser) {
-      setError('Please log in to purchase this gig');
-      return;
-    }
-
-    if (!paypalLoaded) {
-      setError('Payment system is still initializing');
-      return;
-    }
-
-    try {
-      const container = document.getElementById('paypal-button-container');
-      if (!container) {
-        throw new Error('PayPal container not found');
-      }
-      container.innerHTML = '';
-
-      await window.paypal.Buttons({
-        createOrder: async () => {
-          try {
-            setError('');
-            console.log('Starting PayPal order creation...');
-            const orderId = await createPaymentOrder();
-            console.log('PayPal order created successfully:', orderId);
-            return orderId;
-          } catch (err) {
-            console.error('PayPal order creation failed:', err);
-            setError(err.message);
-            throw err;
-          }
-        },
-
-        onApprove: async (data) => {
-          try {
-            console.log('Payment approved, proceeding with capture:', data);
-            const token = await currentUser.getIdToken();
-            
-            const response = await fetch('https://www.flexhunt.co/api/capture-payment', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`
-              },
-              credentials: 'include',
-              body: JSON.stringify({ 
-                orderID: data.orderID,
-                gigId: id
-              })
-            });
-
-            if (!response.ok) {
-              const errorText = await response.text();
-              console.error('Capture error response:', errorText);
-              throw new Error(`Payment capture failed: ${response.status} ${response.statusText}`);
-            }
-
-            const captureResult = await response.json();
-            console.log('Capture result:', captureResult);
-            
-            const db = getFirestore();
-            const batch = writeBatch(db);
-
-            const paymentsRef = collection(db, 'payments');
-            const q = query(paymentsRef, where('paypalOrderId', '==', data.orderID));
-            const querySnapshot = await getDocs(q);
-            
-            if (!querySnapshot.empty) {
-              const paymentDoc = querySnapshot.docs[0];
-              const paymentRef = doc(db, 'payments', paymentDoc.id);
-              
-              batch.update(paymentRef, {
-                status: captureResult.status || 'COMPLETED',
-                updatedAt: serverTimestamp(),
-                completedAt: serverTimestamp(),
-                captureId: captureResult.captureId
-              });
-
-              if (captureResult.status === 'COMPLETED') {
-                const orderRef = doc(collection(db, 'orders'));
-                batch.set(orderRef, {
-                  gigId: id,
-                  gigTitle: gig.title,
-                  buyerId: currentUser.uid,
-                  buyerEmail: currentUser.email,
-                  buyerName: currentUser.displayName || 'Anonymous',
-                  sellerId: gig.providerId,
-                  sellerEmail: gig.providerEmail || '',
-                  sellerName: gig.provider || 'Unknown Provider',
-                  paymentId: paymentDoc.id,
-                  status: 'PENDING',
-                  createdAt: serverTimestamp(),
-                  updatedAt: serverTimestamp(),
-                  amount: Number(gig.startingPrice),
-                  deliveryTime: gig.deliveryTime || '7 days',
-                  category: gig.category || 'uncategorized'
-                });
-              }
-
-              await batch.commit();
-              console.log('Payment records updated successfully');
-              navigate('/orders');
-            }
-          } catch (err) {
-            console.error('Payment capture error:', err);
-            setError(err.message || 'Failed to complete payment');
-          }
-        },
-
-        onError: (err) => {
-          console.error('PayPal error:', err);
-          setError('Payment failed. Please try again.');
-        }
-      }).render('#paypal-button-container');
-    } catch (err) {
-      console.error('Payment processing error:', err);
-      setError(err.message || 'Error processing payment');
-    }
-  };
-
   useEffect(() => {
     const fetchGig = async () => {
       try {
@@ -241,7 +52,7 @@ const GigDetails = () => {
         
         if (gigDoc.exists()) {
           const gigData = { id: gigDoc.id, ...gigDoc.data() };
-          console.log('Fetched gig data:', gigData);
+          console.log('Fetched gig data:', gigData); // Debug log
           setGig(gigData);
         } else {
           setError('Gig not found');
@@ -256,6 +67,44 @@ const GigDetails = () => {
 
     fetchGig();
   }, [id]);
+
+  const checkMessageRateLimit = async (userId) => {
+    const db = getFirestore();
+    const userRef = doc(db, 'users', userId);
+    const userDoc = await getDoc(userRef);
+    
+    if (!userDoc.exists()) return true;
+    
+    const lastMessage = userDoc.data().lastMessage;
+    if (!lastMessage) return true;
+    
+    // Rate limit: 1 message per 2 seconds
+    const timeSinceLastMessage = Date.now() - new Date(lastMessage).getTime();
+    return timeSinceLastMessage > 2000;
+  };
+  const messageSchema = z.object({
+    message: z.string()
+      .min(1, 'Message cannot be empty')
+      .max(1000, 'Message is too long')
+      .trim()
+  });
+
+  const updateMessageTimestamp = async (userId) => {
+    const db = getFirestore();
+    const userRef = doc(db, 'users', userId);
+    
+    try {
+      await setDoc(userRef, {
+        lastMessage: new Date().toISOString(),
+        messageCount: increment(1)
+      }, { merge: true });
+      
+      return true;
+    } catch (error) {
+      console.error('Error updating message timestamp:', error);
+      return false;
+    }
+  };
 
   useEffect(() => {
     if (!currentUser || !gig) return;
@@ -278,39 +127,6 @@ const GigDetails = () => {
     return () => unsubscribe();
   }, [id, currentUser, gig]);
 
-  useEffect(() => {
-    const loadPaypalScript = () => {
-      if (window.paypal) {
-        setPaypalLoaded(true);
-        return;
-      }
-
-      const script = document.createElement('script');
-      script.src = 'https://www.paypal.com/sdk/js?client-id=Ael-tHA9_mkr9yKohQV7M3O_LUq7ZfHAAA002cENIRptQc15oNItGBYhkXV0JHFoiTIeRz6F6apyUec2';
-      script.async = true;
-      
-      script.onload = () => {
-        setPaypalLoaded(true);
-      };
-      
-      script.onerror = () => {
-        console.error('Failed to load PayPal SDK');
-        setError('Failed to initialize payment system');
-      };
-
-      document.body.appendChild(script);
-    };
-
-    loadPaypalScript();
-
-    return () => {
-      const paypalScript = document.querySelector('script[src*="paypal"]');
-      if (paypalScript) {
-        paypalScript.remove();
-      }
-    };
-  }, []);
-
   const handleSendMessage = async (e) => {
     e.preventDefault();
     if (!currentUser || sendingMessage) return;
@@ -318,34 +134,322 @@ const GigDetails = () => {
     try {
       setSendingMessage(true);
 
+      // Validate message
+      const validatedData = messageSchema.parse({
+        message: newMessage
+      });
+
+      // Rate limiting check
+      const canSendMessage = await checkMessageRateLimit(currentUser.uid);
+      if (!canSendMessage) {
+        toast({
+          variant: "destructive",
+          title: "Too Many Messages",
+          description: "Please wait a moment before sending another message.",
+        });
+        return;
+      }
+
       const db = getFirestore();
       await addDoc(collection(db, 'messages'), {
         gigId: id,
         senderId: currentUser.uid,
         senderName: currentUser.displayName || currentUser.email,
         receiverId: gig.providerId,
-        message: newMessage.trim(),
+        message: validatedData.message,
         timestamp: new Date().toISOString(),
         read: false
       });
 
       setNewMessage('');
+      
+      // Update last message timestamp for rate limiting
+      await updateMessageTimestamp(currentUser.uid);
+
       toast({
         title: "Message Sent",
-        description: "Your message has been sent successfully."
+        description: "Your message has been sent successfully.",
       });
     } catch (err) {
-      console.error('Error sending message:', err);
-      toast({
-        variant: "destructive",
-        title: "Message Failed",
-        description: "Failed to send message. Please try again."
-      });
+      if (err instanceof z.ZodError) {
+        toast({
+          variant: "destructive",
+          title: "Invalid Message",
+          description: err.errors[0].message,
+        });
+      } else {
+        console.error('Error sending message:', err);
+        toast({
+          variant: "destructive",
+          title: "Message Failed",
+          description: "Failed to send message. Please try again.",
+        });
+      }
     } finally {
       setSendingMessage(false);
     }
   };
 
+  useEffect(() => {
+    const loadPaypalScript = () => {
+      // Check if PayPal script is already loaded
+      if (window.paypal) {
+        setPaypalLoaded(true);
+        return;
+      }
+
+      // Create PayPal script element
+      const script = document.createElement('script');
+      script.src = 'https://www.paypal.com/sdk/js?client-id=Ael-tHA9_mkr9yKohQV7M3O_LUq7ZfHAAA002cENIRptQc15oNItGBYhkXV0JHFoiTIeRz6F6apyUec2';
+      script.async = true;
+          
+          script.onload = () => {
+            setPaypalLoaded(true);
+          };
+          
+          script.onerror = () => {
+            console.error('Failed to load PayPal SDK');
+            setError('Failed to initialize payment system');
+          };
+    
+          document.body.appendChild(script);
+        };
+    
+        loadPaypalScript();
+    
+        // Cleanup
+        return () => {
+          const paypalScript = document.querySelector('script[src*="paypal"]');
+          if (paypalScript) {
+            paypalScript.remove();
+          }
+        };
+      }, []);
+    
+      
+  const createPaymentOrder = async () => {
+    if (!currentUser || !gig) {
+      throw new Error('User or gig data is missing');
+    }
+
+    // Debug logging
+    console.log('Creating payment for gig:', {
+      price: gig.startingPrice,
+      providerId: gig.providerId,
+      title: gig.title,
+      fullGig: gig
+    });
+
+    // Validate required fields with detailed error message
+    const missingFields = [];
+    if (!gig.providerId) missingFields.push('providerId');
+    if (!gig.title) missingFields.push('title');
+    if (!gig.startingPrice) missingFields.push('startingPrice');
+
+    if (missingFields.length > 0) {
+      const errorMsg = `Missing required fields: ${missingFields.join(', ')}`;
+      console.error(errorMsg, gig);
+      throw new Error(errorMsg);
+    }
+
+    const db = getFirestore();
+    
+    try {
+      const paymentData = {
+        gigId: id,
+        gigTitle: gig.title,
+        buyerId: currentUser.uid,
+        buyerEmail: currentUser.email,
+        buyerName: currentUser.displayName || 'Anonymous',
+        sellerId: gig.providerId,
+        sellerEmail: gig.providerEmail || '',
+        sellerName: gig.provider || 'Unknown Provider',
+        amount: Number(gig.startingPrice),
+        status: 'PENDING',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        currency: 'USD',
+        paymentMethod: 'PAYPAL',
+        deliveryTime: gig.deliveryTime || '7 days',
+        category: gig.category || 'uncategorized'
+      };
+
+      // Log the payment data before creation
+      console.log('Creating payment with data:', paymentData);
+
+      const paymentDoc = await addDoc(collection(db, 'payments'), paymentData);
+      console.log('Payment document created with ID:', paymentDoc.id);
+
+      return paymentDoc.id;
+    } catch (err) {
+      console.error('Error creating payment document:', err);
+      throw new Error(`Failed to create payment record: ${err.message}`);
+    }
+  };
+  const handleBuyNow = async () => {
+    if (!currentUser) {
+      setError('Please log in to purchase this gig');
+      return;
+    }
+
+    if (!paypalLoaded) {
+      setError('Payment system is still initializing. Please try again.');
+      return;
+    }
+
+    if (!gig) {
+      setError('Gig details not loaded');
+      return;
+    }
+
+    try {
+      const container = document.getElementById('paypal-button-container');
+      if (container) {
+        container.innerHTML = '';
+      }
+
+      window.paypal.Buttons({
+        createOrder: async () => {
+          try {
+            const paymentId = await createPaymentOrder();
+
+            const response = await fetch('https://www.flexhunt.co/api/create-payment', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${await currentUser.getIdToken()}`
+              },
+              body: JSON.stringify({
+                gigId: id,
+                paymentId: paymentId,
+                buyerId: currentUser.uid,
+                amount: gig.startingPrice
+              })
+            });
+
+            if (!response.ok) {
+              const errorData = await response.json();
+              throw new Error(errorData.message || 'Failed to create PayPal order');
+            }
+
+            const data = await response.json();
+            if (!data.orderID) {
+              throw new Error('No order ID received from server');
+            }
+
+            const db = getFirestore();
+            await updateDoc(doc(db, 'payments', paymentId), {
+              paypalOrderId: data.orderID,
+              updatedAt: serverTimestamp()
+            });
+
+            return data.orderID;
+          } catch (err) {
+            console.error('Error creating order:', err);
+            setError(err.message || 'Failed to create payment order');
+            throw err;
+          }
+        },
+        onApprove: async (data, actions) => {
+          try {
+            const captureResponse = await fetch('https://www.flexhunt.co/api/capture-payment', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${await currentUser.getIdToken()}`
+              },
+              body: JSON.stringify({
+                orderID: data.orderID
+              })
+            });
+
+            if (!captureResponse.ok) {
+              const errorData = await captureResponse.json();
+              throw new Error(errorData.message || 'Failed to capture payment');
+            }
+
+            const captureResult = await captureResponse.json();
+            
+            const db = getFirestore();
+            const paymentsRef = collection(db, 'payments');
+            const q = query(paymentsRef, where('paypalOrderId', '==', data.orderID));
+            const querySnapshot = await getDocs(q);
+            
+            if (!querySnapshot.empty) {
+              const paymentDoc = querySnapshot.docs[0];
+              
+              // Only update with defined fields
+              const updateData = {
+                status: captureResult.status || 'COMPLETED',
+                updatedAt: serverTimestamp(),
+                completedAt: serverTimestamp()
+              };
+              
+              // Only add captureId if it exists
+              if (captureResult.captureId) {
+                updateData.captureId = captureResult.captureId;
+              }
+
+              await updateDoc(doc(db, 'payments', paymentDoc.id), updateData);
+
+              // Create order document only if payment is completed
+              if (captureResult.status === 'COMPLETED') {
+                await addDoc(collection(db, 'orders'), {
+                  gigId: id,
+                  gigTitle: gig.title,
+                  buyerId: currentUser.uid,
+                  buyerEmail: currentUser.email,
+                  buyerName: currentUser.displayName || 'Anonymous',
+                  sellerId: gig.providerId,
+                  sellerEmail: gig.providerEmail || '',
+                  sellerName: gig.provider || 'Unknown Provider',
+                  paymentId: paymentDoc.id,
+                  status: 'PENDING',
+                  createdAt: serverTimestamp(),
+                  updatedAt: serverTimestamp(),
+                  amount: Number(gig.startingPrice),
+                  deliveryTime: gig.deliveryTime || '7 days',
+                  category: gig.category || 'uncategorized'
+                });
+              }
+
+              navigate(`/orders`);
+            }
+          } catch (err) {
+            console.error('Payment capture error:', err);
+            setError(err.message || 'Failed to complete payment');
+          }
+        },
+        onError: (err) => {
+          console.error('PayPal error:', err);
+          setError('Payment failed. Please try again.');
+        },
+        onCancel: async (data) => {
+          if (!data?.orderID) return;
+          
+          try {
+            const db = getFirestore();
+            const paymentsRef = collection(db, 'payments');
+            const q = query(paymentsRef, where('paypalOrderId', '==', data.orderID));
+            const querySnapshot = await getDocs(q);
+            
+            if (!querySnapshot.empty) {
+              const paymentDoc = querySnapshot.docs[0];
+              await updateDoc(doc(db, 'payments', paymentDoc.id), {
+                status: 'CANCELLED',
+                updatedAt: serverTimestamp()
+              });
+            }
+          } catch (err) {
+            console.error('Error updating cancelled payment:', err);
+          }
+        }
+      }).render('#paypal-button-container');
+    } catch (err) {
+      console.error('Payment processing error:', err);
+      setError(err.message || 'Error processing payment');
+    }
+  };
   if (loading) return <div className="text-center mt-8">Loading...</div>;
   if (error) return (
     <Alert variant="destructive" className="max-w-2xl mx-auto mt-8">
