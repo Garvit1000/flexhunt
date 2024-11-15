@@ -10,10 +10,10 @@ const app = express();
 
 // Middleware
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'https://www.flexhunt.co',
+  origin: ['https://www.flexhunt.co', 'http://localhost:5173'], // Add your frontend URLs
+  credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
 app.use(express.json());
 
@@ -39,44 +39,44 @@ const paypalClient = new paypal.core.PayPalHttpClient(
 // Routes
 app.post('/api/create-payment', async (req, res) => {
   try {
+    // Log incoming request
+    console.log('Payment creation request received:', {
+      body: req.body,
+      headers: req.headers
+    });
+
     const { gigId, buyerId, amount } = req.body;
 
-    // Input validation with detailed error messages
+    // Validate inputs
     if (!gigId || !buyerId || !amount) {
-      return res.status(400).json({ 
+      console.log('Missing required fields:', { gigId, buyerId, amount });
+      return res.status(400).json({
         success: false,
-        error: 'Missing required fields',
-        details: { 
-          gigId: !gigId ? 'Missing gigId' : null,
-          buyerId: !buyerId ? 'Missing buyerId' : null,
-          amount: !amount ? 'Missing amount' : null
-        }
+        error: 'Missing required fields'
       });
     }
 
-    // Validate amount format
+    // Validate amount
     const parsedAmount = parseFloat(amount);
     if (isNaN(parsedAmount) || parsedAmount <= 0) {
       return res.status(400).json({
         success: false,
-        error: 'Invalid amount format',
-        details: { amount }
+        error: 'Invalid amount'
       });
     }
 
-    // Get gig details from Firestore with error handling
+    // Get gig details
     const gigDoc = await db.collection('gigs').doc(gigId).get();
     if (!gigDoc.exists) {
-      return res.status(404).json({ 
+      return res.status(404).json({
         success: false,
-        error: 'Gig not found',
-        details: { gigId }
+        error: 'Gig not found'
       });
     }
 
     const gig = gigDoc.data();
 
-    // Create PayPal order with enhanced error handling
+    // Create PayPal order
     const request = new paypal.orders.OrdersCreateRequest();
     request.prefer("return=representation");
     request.requestBody({
@@ -84,21 +84,22 @@ app.post('/api/create-payment', async (req, res) => {
       purchase_units: [{
         amount: {
           currency_code: 'USD',
-          value: parsedAmount.toFixed(2) // Ensure proper decimal formatting
+          value: parsedAmount.toFixed(2)
         },
-        description: `Payment for: ${gig.title}`,
-        custom_id: `${gigId}_${buyerId}_${Date.now()}`
+        description: `Payment for: ${gig.title || 'Gig Service'}`
       }]
     });
 
+    console.log('Sending request to PayPal');
     const order = await paypalClient.execute(request);
-    
-    // Verify order creation success
+    console.log('PayPal response received:', order.result);
+
+    // Validate PayPal response
     if (!order.result || !order.result.id) {
-      throw new Error('PayPal order creation failed');
+      throw new Error('Invalid PayPal response');
     }
 
-    // Create payment record in Firestore
+    // Create payment record
     const paymentRef = await db.collection('payments').add({
       gigId,
       buyerId,
@@ -106,25 +107,21 @@ app.post('/api/create-payment', async (req, res) => {
       amount: parsedAmount,
       status: 'PENDING',
       paypalOrderId: order.result.id,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      escrowReleaseDate: null,
-      isDisputed: false
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
     });
 
-    // Send successful response with all required data
+    // Send successful response
     return res.status(200).json({
       success: true,
       orderID: order.result.id,
-      status: order.result.status,
       paymentId: paymentRef.id
     });
 
   } catch (error) {
     console.error('Payment creation error:', error);
-    return res.status(500).json({ 
+    return res.status(500).json({
       success: false,
-      error: 'Payment creation failed',
-      message: error.message
+      error: error.message || 'Payment creation failed'
     });
   }
 });
