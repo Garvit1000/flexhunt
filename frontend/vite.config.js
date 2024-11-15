@@ -9,5 +9,16 @@ export default defineConfig({
       // eslint-disable-next-line no-undef
       "@": path.resolve(__dirname, "./src"),
     },
+    build: {
+      outDir: 'dist',
+    },
+    server: {
+      proxy: {
+        '/api': {
+          target: process.env.VITE_API_URL || 'http://localhost:5000',
+          changeOrigin: true
+        }
+      }
+    }
   },
 })
