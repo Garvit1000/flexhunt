@@ -313,7 +313,7 @@ const GigDetails = () => {
           try {
             const paymentId = await createPaymentOrder();
 
-            const response = await fetch('https://flexhunt.onrender.com/api/create-payment', {
+            const response = await fetch('https://www.flexhunt.co/api/create-payment', {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
@@ -352,7 +352,7 @@ const GigDetails = () => {
         },
         onApprove: async (data, actions) => {
           try {
-            const captureResponse = await fetch('https://flexhunt.onrender.com/api/capture-payment', {
+            const captureResponse = await fetch('https://www.flexhunt.co/api/capture-payment', {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
