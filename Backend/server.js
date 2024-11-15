@@ -9,147 +9,72 @@ const { admin, db } = require('./config/firebase-config');
 const app = express();
 
 // Middleware
-app.use(cors({
-  origin: ['https://www.flexhunt.co', 'http://localhost:5173'], // Add your frontend URLs
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
+app.use(cors());
 app.use(express.json());
 
-app.use((err, req, res, next) => {
-  console.error('Server error:', err);
-  res.status(500).json({
-    error: 'Internal server error',
-    message: err.message
-  });
-});
 // PayPal Configuration
-let paypalClient;
-try {
-  const environment = process.env.NODE_ENV === 'production'
-    ? paypal.core.LiveEnvironment
-    : paypal.core.SandboxEnvironment;
+const environment = process.env.NODE_ENV === 'production'
+  ? paypal.core.LiveEnvironment
+  : paypal.core.SandboxEnvironment;
 
-  paypalClient = new paypal.core.PayPalHttpClient(
-    new environment(
-      process.env.PAYPAL_CLIENT_ID,
-      process.env.PAYPAL_CLIENT_SECRET
-    )
-  );
-} catch (error) {
-  console.error('PayPal client initialization error:', error);
-}
+const paypalClient = new paypal.core.PayPalHttpClient(
+  new environment(
+    process.env.PAYPAL_CLIENT_ID,
+    process.env.PAYPAL_CLIENT_SECRET
+  )
+);
 
-// Validation middleware
-const validatePaymentRequest = (req, res, next) => {
-  const { gigId, buyerId, amount } = req.body;
-  
-  if (!gigId || !buyerId || !amount) {
-    return res.status(400).json({
-      success: false,
-      error: 'Missing required fields',
-      details: { gigId, buyerId, amount }
-    });
-  }
-
-  const parsedAmount = parseFloat(amount);
-  if (isNaN(parsedAmount) || parsedAmount <= 0) {
-    return res.status(400).json({
-      success: false,
-      error: 'Invalid amount'
-    });
-  }
-
-  req.parsedAmount = parsedAmount;
-  next();
-};
-
-// Updated payment creation route
-app.post('/api/create-payment', validatePaymentRequest, async (req, res) => {
+// Routes
+app.post('/api/create-payment', async (req, res) => {
   try {
-    console.log('Payment creation request received:', {
-      body: req.body,
-      headers: req.headers
-    });
+    const { gigId, buyerId, amount } = req.body;
 
-    const { gigId, buyerId } = req.body;
-    const parsedAmount = req.parsedAmount;
-
-    // Get gig details with error handling
+    // Get gig details from Firestore
     const gigDoc = await db.collection('gigs').doc(gigId).get();
-    if (!gigDoc.exists) {
-      return res.status(404).json({
-        success: false,
-        error: 'Gig not found'
-      });
-    }
-
     const gig = gigDoc.data();
 
-    // Create PayPal order with enhanced error handling
-    try {
-      const request = new paypal.orders.OrdersCreateRequest();
-      request.prefer("return=representation");
-      request.requestBody({
-        intent: 'CAPTURE',
-        purchase_units: [{
-          amount: {
-            currency_code: 'USD',
-            value: parsedAmount.toFixed(2)
-          },
-          description: `Payment for: ${gig.title || 'Gig Service'}`
-        }]
-      });
-
-      console.log('Sending request to PayPal');
-      const order = await paypalClient.execute(request);
-      
-      if (!order || !order.result || !order.result.id) {
-        throw new Error('Invalid PayPal response structure');
-      }
-
-      console.log('PayPal response received:', order.result);
-
-      // Create payment record with transaction
-      const paymentRef = await db.runTransaction(async (transaction) => {
-        const newPaymentRef = db.collection('payments').doc();
-        
-        await transaction.set(newPaymentRef, {
-          gigId,
-          buyerId,
-          sellerId: gig.providerId,
-          amount: parsedAmount,
-          status: 'PENDING',
-          paypalOrderId: order.result.id,
-          createdAt: admin.firestore.FieldValue.serverTimestamp()
-        });
-
-        return newPaymentRef;
-      });
-
-      return res.status(200).json({
-        success: true,
-        orderID: order.result.id,
-        paymentId: paymentRef.id
-      });
-
-    } catch (paypalError) {
-      console.error('PayPal order creation error:', paypalError);
-      return res.status(400).json({
-        success: false,
-        error: 'PayPal order creation failed',
-        details: paypalError.message
-      });
+    if (!gig) {
+      return res.status(404).json({ error: 'Gig not found' });
     }
 
-  } catch (error) {
-    console.error('Payment creation error:', error);
-    return res.status(500).json({
-      success: false,
-      error: 'Payment creation failed',
-      details: error.message
+    // Create PayPal order
+    const request = new paypal.orders.OrdersCreateRequest();
+    request.prefer("return=representation");
+    request.requestBody({
+      intent: 'CAPTURE',
+      purchase_units: [{
+        amount: {
+          currency_code: 'USD',
+          value: amount
+        },
+        description: `Payment for: ${gig.title}`,
+        custom_id: `${gigId}_${buyerId}_${Date.now()}`
+      }]
     });
+
+    const order = await paypalClient.execute(request);
+
+    // Create payment record in Firestore
+    await db.collection('payments').add({
+      gigId,
+      buyerId,
+      sellerId: gig.providerId,
+      amount,
+      status: 'PENDING',
+      paypalOrderId: order.result.id,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      escrowReleaseDate: null,
+      isDisputed: false
+    });
+
+    res.json({
+      orderID: order.result.id,
+      status: order.result.status
+    });
+
+  } catch (error) {
+    console.error('Error creating payment:', error);
+    res.status(500).json({ error: 'Error creating payment' });
   }
 });
 
