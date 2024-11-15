@@ -41,23 +41,42 @@ app.post('/api/create-payment', async (req, res) => {
   try {
     const { gigId, buyerId, amount } = req.body;
 
-    // Input validation
+    // Input validation with detailed error messages
     if (!gigId || !buyerId || !amount) {
       return res.status(400).json({ 
+        success: false,
         error: 'Missing required fields',
-        details: { gigId, buyerId, amount }
+        details: { 
+          gigId: !gigId ? 'Missing gigId' : null,
+          buyerId: !buyerId ? 'Missing buyerId' : null,
+          amount: !amount ? 'Missing amount' : null
+        }
       });
     }
 
-    // Get gig details from Firestore
-    const gigDoc = await db.collection('gigs').doc(gigId).get();
-    const gig = gigDoc.data();
-
-    if (!gig) {
-      return res.status(404).json({ error: 'Gig not found' });
+    // Validate amount format
+    const parsedAmount = parseFloat(amount);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid amount format',
+        details: { amount }
+      });
     }
 
-    // Create PayPal order
+    // Get gig details from Firestore with error handling
+    const gigDoc = await db.collection('gigs').doc(gigId).get();
+    if (!gigDoc.exists) {
+      return res.status(404).json({ 
+        success: false,
+        error: 'Gig not found',
+        details: { gigId }
+      });
+    }
+
+    const gig = gigDoc.data();
+
+    // Create PayPal order with enhanced error handling
     const request = new paypal.orders.OrdersCreateRequest();
     request.prefer("return=representation");
     request.requestBody({
@@ -65,7 +84,7 @@ app.post('/api/create-payment', async (req, res) => {
       purchase_units: [{
         amount: {
           currency_code: 'USD',
-          value: amount.toString() // Ensure amount is string
+          value: parsedAmount.toFixed(2) // Ensure proper decimal formatting
         },
         description: `Payment for: ${gig.title}`,
         custom_id: `${gigId}_${buyerId}_${Date.now()}`
@@ -74,12 +93,17 @@ app.post('/api/create-payment', async (req, res) => {
 
     const order = await paypalClient.execute(request);
     
+    // Verify order creation success
+    if (!order.result || !order.result.id) {
+      throw new Error('PayPal order creation failed');
+    }
+
     // Create payment record in Firestore
     const paymentRef = await db.collection('payments').add({
       gigId,
       buyerId,
       sellerId: gig.providerId,
-      amount,
+      amount: parsedAmount,
       status: 'PENDING',
       paypalOrderId: order.result.id,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -87,8 +111,8 @@ app.post('/api/create-payment', async (req, res) => {
       isDisputed: false
     });
 
-    // Send successful response with required data
-    res.status(200).json({
+    // Send successful response with all required data
+    return res.status(200).json({
       success: true,
       orderID: order.result.id,
       status: order.result.status,
@@ -96,15 +120,15 @@ app.post('/api/create-payment', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error creating payment:', error);
-    // Send detailed error response
-    res.status(500).json({ 
-      error: 'Error creating payment',
-      message: error.message,
-      details: error.details || {}
+    console.error('Payment creation error:', error);
+    return res.status(500).json({ 
+      success: false,
+      error: 'Payment creation failed',
+      message: error.message
     });
   }
 });
+
 
 app.post('/api/capture-payment', async (req, res) => {
   try {
