@@ -226,89 +226,48 @@ const GigDetails = () => {
         };
       }, []);
     
-      
 const createPaymentOrder = async () => {
   if (!currentUser || !gig) {
     throw new Error('User or gig data is missing');
   }
 
   try {
-    // Get the authentication token
     const token = await currentUser.getIdToken();
     
-    // Create the request payload
     const payload = {
       gigId: id,
       buyerId: currentUser.uid,
       amount: parseFloat(gig.startingPrice)
     };
 
-    // Log the request details
-    console.log('Creating payment request:', {
-      url: 'https://www.flexhunt.co/api/create-payment',
-      payload
-    });
-
-    // Make the API request
     const response = await fetch('https://www.flexhunt.co/api/create-payment', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`,
       },
-      credentials: 'include',
       body: JSON.stringify(payload)
     });
 
-    // Log the response details
-    console.log('Server response:', {
-      status: response.status,
-      statusText: response.statusText,
-      headers: Object.fromEntries(response.headers.entries())
-    });
+    // Handle non-JSON responses
+    const contentType = response.headers.get('content-type');
+    if (!contentType || !contentType.includes('application/json')) {
+      throw new Error('Invalid response format from server');
+    }
 
-    // Handle non-200 responses with detailed error logging
+    const data = await response.json();
+
+    // Check for error response
     if (!response.ok) {
-      const errorBody = await response.text();
-      console.error('Error response body:', errorBody);
-      
-      let errorMessage;
-      try {
-        const errorJson = JSON.parse(errorBody);
-        errorMessage = errorJson.error || errorJson.message || `HTTP error! status: ${response.status}`;
-      } catch (e) {
-        errorMessage = errorBody || `HTTP error! status: ${response.status}`;
-      }
-      
-      throw new Error(errorMessage);
+      throw new Error(data.error || data.message || 'Payment creation failed');
     }
 
-    // Get the response body
-    const responseText = await response.text();
-    console.log('Raw response body:', responseText);
-
-    // Handle empty response
-    if (!responseText) {
-      throw new Error('Server returned an empty response');
+    // Validate success response
+    if (!data.success || !data.orderID) {
+      throw new Error('Invalid response data from server');
     }
 
-    // Parse the response
-    let data;
-    try {
-      data = JSON.parse(responseText);
-    } catch (err) {
-      console.error('JSON parsing error:', err);
-      console.error('Raw response:', responseText);
-      throw new Error('Invalid JSON response from server');
-    }
-
-    // Validate the response data
-    if (!data || !data.orderID) {
-      console.error('Invalid response data:', data);
-      throw new Error('Response missing required orderID');
-    }
-
-    // Create the payment record in Firestore
+    // Create payment record in Firestore
     const db = getFirestore();
     await addDoc(collection(db, 'payments'), {
       gigId: id,
@@ -316,27 +275,15 @@ const createPaymentOrder = async () => {
       amount: parseFloat(gig.startingPrice),
       paypalOrderId: data.orderID,
       status: 'PENDING',
-      createdAt: serverTimestamp(),
-      metadata: {
-        requestPayload: payload,
-        responseData: data
-      }
+      createdAt: serverTimestamp()
     });
 
     return data.orderID;
   } catch (err) {
-    // Enhanced error logging
     console.error('Payment creation failed:', {
       error: err,
-      message: err.message,
-      stack: err.stack,
-      gig: {
-        id,
-        price: gig?.startingPrice,
-        providerId: gig?.providerId
-      }
+      message: err.message
     });
-    
     throw new Error(`Payment creation failed: ${err.message}`);
   }
 };
@@ -358,22 +305,19 @@ const handleBuyNow = async () => {
       container.innerHTML = '';
     }
 
-    window.paypal.Buttons({
-      // Enhanced error handling in createOrder
+    await window.paypal.Buttons({
       createOrder: async () => {
         try {
-          console.log('Starting PayPal order creation...');
           const orderId = await createPaymentOrder();
-          console.log('PayPal order created successfully:', orderId);
+          if (!orderId) {
+            throw new Error('Failed to create PayPal order');
+          }
           return orderId;
         } catch (err) {
-          console.error('Failed to create PayPal order:', err);
           setError(err.message || 'Failed to create payment order');
-          // Re-throw the error to ensure PayPal handles it appropriately
           throw err;
         }
       },
-
       // Rest of the PayPal button configuration remains the same
       onApprove: async (data, actions) => {
         try {
