@@ -1,0 +1,24 @@
+{
+  "name": "flexhunt",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "install-all": "cd backend && npm install && cd ../frontend && npm install",
+    "build": "cd backend && npm run build && cd ../frontend && npm run build",
+    "start": "cd backend && node server.js && cd ../frontend && npm run dev",
+    "dev": "cd backend && npm run dev"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Garvit1000/flexhunt.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Garvit1000/flexhunt/issues"
+  },
+  "homepage": "https://github.com/Garvit1000/flexhunt#readme"
+}
