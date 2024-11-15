@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { z } from 'zod';
 import { 
   Card,
   CardHeader,
@@ -36,6 +35,7 @@ const GigDetails = () => {
   const { id } = useParams();
   const navigate = useNavigate();
   const { currentUser } = useAuth();
+  const { toast } = useToast();
   const [gig, setGig] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -44,7 +44,196 @@ const GigDetails = () => {
   const [chatOpen, setChatOpen] = useState(false);
   const [paypalLoaded, setPaypalLoaded] = useState(false);
   const [sendingMessage, setSendingMessage] = useState(false);
-    useEffect(() => {
+
+  const createPaymentOrder = async () => {
+    if (!currentUser || !gig) {
+      throw new Error('Missing user or gig data');
+    }
+
+    try {
+      const token = await currentUser.getIdToken();
+      
+      const payload = {
+        gigId: id,
+        buyerId: currentUser.uid,
+        amount: parseFloat(gig.startingPrice),
+        currency: 'USD',
+        description: `Payment for ${gig.title}`
+      };
+
+      console.log('Sending payment creation request with payload:', payload);
+
+      const response = await fetch('https://www.flexhunt.co/api/create-payment', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Server error response:', errorText);
+        throw new Error(`Payment creation failed: ${response.status} ${response.statusText}`);
+      }
+
+      let responseText;
+      try {
+        responseText = await response.text();
+        console.log('Raw server response:', responseText);
+      } catch (err) {
+        console.error('Error reading response:', err);
+        throw new Error('Failed to read server response');
+      }
+
+      let data;
+      try {
+        data = JSON.parse(responseText);
+        console.log('Parsed response data:', data);
+      } catch (err) {
+        console.error('JSON parse error:', err, 'Response text:', responseText);
+        throw new Error('Invalid JSON response from server');
+      }
+
+      if (!data || typeof data !== 'object') {
+        throw new Error('Invalid response format: expected object');
+      }
+
+      if (!data.orderID) {
+        throw new Error('Invalid response format: missing orderID');
+      }
+
+      return data.orderID;
+
+    } catch (err) {
+      console.error('Payment creation error:', err);
+      throw new Error(err.message || 'Failed to create payment');
+    }
+  };
+
+  const handleBuyNow = async () => {
+    if (!currentUser) {
+      setError('Please log in to purchase this gig');
+      return;
+    }
+
+    if (!paypalLoaded) {
+      setError('Payment system is still initializing');
+      return;
+    }
+
+    try {
+      const container = document.getElementById('paypal-button-container');
+      if (!container) {
+        throw new Error('PayPal container not found');
+      }
+      container.innerHTML = '';
+
+      await window.paypal.Buttons({
+        createOrder: async () => {
+          try {
+            setError('');
+            console.log('Starting PayPal order creation...');
+            const orderId = await createPaymentOrder();
+            console.log('PayPal order created successfully:', orderId);
+            return orderId;
+          } catch (err) {
+            console.error('PayPal order creation failed:', err);
+            setError(err.message);
+            throw err;
+          }
+        },
+
+        onApprove: async (data) => {
+          try {
+            console.log('Payment approved, proceeding with capture:', data);
+            const token = await currentUser.getIdToken();
+            
+            const response = await fetch('https://www.flexhunt.co/api/capture-payment', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+              },
+              credentials: 'include',
+              body: JSON.stringify({ 
+                orderID: data.orderID,
+                gigId: id
+              })
+            });
+
+            if (!response.ok) {
+              const errorText = await response.text();
+              console.error('Capture error response:', errorText);
+              throw new Error(`Payment capture failed: ${response.status} ${response.statusText}`);
+            }
+
+            const captureResult = await response.json();
+            console.log('Capture result:', captureResult);
+            
+            const db = getFirestore();
+            const batch = writeBatch(db);
+
+            const paymentsRef = collection(db, 'payments');
+            const q = query(paymentsRef, where('paypalOrderId', '==', data.orderID));
+            const querySnapshot = await getDocs(q);
+            
+            if (!querySnapshot.empty) {
+              const paymentDoc = querySnapshot.docs[0];
+              const paymentRef = doc(db, 'payments', paymentDoc.id);
+              
+              batch.update(paymentRef, {
+                status: captureResult.status || 'COMPLETED',
+                updatedAt: serverTimestamp(),
+                completedAt: serverTimestamp(),
+                captureId: captureResult.captureId
+              });
+
+              if (captureResult.status === 'COMPLETED') {
+                const orderRef = doc(collection(db, 'orders'));
+                batch.set(orderRef, {
+                  gigId: id,
+                  gigTitle: gig.title,
+                  buyerId: currentUser.uid,
+                  buyerEmail: currentUser.email,
+                  buyerName: currentUser.displayName || 'Anonymous',
+                  sellerId: gig.providerId,
+                  sellerEmail: gig.providerEmail || '',
+                  sellerName: gig.provider || 'Unknown Provider',
+                  paymentId: paymentDoc.id,
+                  status: 'PENDING',
+                  createdAt: serverTimestamp(),
+                  updatedAt: serverTimestamp(),
+                  amount: Number(gig.startingPrice),
+                  deliveryTime: gig.deliveryTime || '7 days',
+                  category: gig.category || 'uncategorized'
+                });
+              }
+
+              await batch.commit();
+              console.log('Payment records updated successfully');
+              navigate('/orders');
+            }
+          } catch (err) {
+            console.error('Payment capture error:', err);
+            setError(err.message || 'Failed to complete payment');
+          }
+        },
+
+        onError: (err) => {
+          console.error('PayPal error:', err);
+          setError('Payment failed. Please try again.');
+        }
+      }).render('#paypal-button-container');
+    } catch (err) {
+      console.error('Payment processing error:', err);
+      setError(err.message || 'Error processing payment');
+    }
+  };
+
+  useEffect(() => {
     const fetchGig = async () => {
       try {
         const db = getFirestore();
@@ -68,44 +257,6 @@ const GigDetails = () => {
     fetchGig();
   }, [id]);
 
-  const checkMessageRateLimit = async (userId) => {
-    const db = getFirestore();
-    const userRef = doc(db, 'users', userId);
-    const userDoc = await getDoc(userRef);
-    
-    if (!userDoc.exists()) return true;
-    
-    const lastMessage = userDoc.data().lastMessage;
-    if (!lastMessage) return true;
-    
-    const timeSinceLastMessage = Date.now() - new Date(lastMessage).getTime();
-    return timeSinceLastMessage > 2000;
-  };
-
-  const messageSchema = z.object({
-    message: z.string()
-      .min(1, 'Message cannot be empty')
-      .max(1000, 'Message is too long')
-      .trim()
-  });
-
-  const updateMessageTimestamp = async (userId) => {
-    const db = getFirestore();
-    const userRef = doc(db, 'users', userId);
-    
-    try {
-      await setDoc(userRef, {
-        lastMessage: new Date().toISOString(),
-        messageCount: increment(1)
-      }, { merge: true });
-      
-      return true;
-    } catch (error) {
-      console.error('Error updating message timestamp:', error);
-      return false;
-    }
-  };
-
   useEffect(() => {
     if (!currentUser || !gig) return;
 
@@ -126,66 +277,6 @@ const GigDetails = () => {
 
     return () => unsubscribe();
   }, [id, currentUser, gig]);
-
-  const handleSendMessage = async (e) => {
-    e.preventDefault();
-    if (!currentUser || sendingMessage) return;
-
-    try {
-      setSendingMessage(true);
-
-      const validatedData = messageSchema.parse({
-        message: newMessage
-      });
-
-      const canSendMessage = await checkMessageRateLimit(currentUser.uid);
-      if (!canSendMessage) {
-        toast({
-          variant: "destructive",
-          title: "Too Many Messages",
-          description: "Please wait a moment before sending another message.",
-        });
-        return;
-      }
-
-      const db = getFirestore();
-      await addDoc(collection(db, 'messages'), {
-        gigId: id,
-        senderId: currentUser.uid,
-        senderName: currentUser.displayName || currentUser.email,
-        receiverId: gig.providerId,
-        message: validatedData.message,
-        timestamp: new Date().toISOString(),
-        read: false
-      });
-
-      setNewMessage('');
-      
-      await updateMessageTimestamp(currentUser.uid);
-
-      toast({
-        title: "Message Sent",
-        description: "Your message has been sent successfully.",
-      });
-    } catch (err) {
-      if (err instanceof z.ZodError) {
-        toast({
-          variant: "destructive",
-          title: "Invalid Message",
-          description: err.errors[0].message,
-        });
-      } else {
-        console.error('Error sending message:', err);
-        toast({
-          variant: "destructive",
-          title: "Message Failed",
-          description: "Failed to send message. Please try again.",
-        });
-      }
-    } finally {
-      setSendingMessage(false);
-    }
-  };
 
   useEffect(() => {
     const loadPaypalScript = () => {
@@ -220,225 +311,38 @@ const GigDetails = () => {
     };
   }, []);
 
-const createPaymentOrder = async () => {
-  if (!currentUser || !gig) {
-    throw new Error('Missing user or gig data');
-  }
+  const handleSendMessage = async (e) => {
+    e.preventDefault();
+    if (!currentUser || sendingMessage) return;
 
-  try {
-    const token = await currentUser.getIdToken();
-    
-    const payload = {
-      gigId: id,
-      buyerId: currentUser.uid,
-      amount: parseFloat(gig.startingPrice),
-      currency: 'USD',
-      description: `Payment for ${gig.title}`
-    };
-
-    console.log('Sending payment creation request with payload:', payload);
-
-    const response = await fetch('https://www.flexhunt.co/api/create-payment', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      credentials: 'include',
-      body: JSON.stringify(payload)
-    });
-
-    // First check if response is ok
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Server error response:', errorText);
-      throw new Error(`Payment creation failed: ${response.status} ${response.statusText}`);
-    }
-
-    // Safely parse the response
-    let responseText;
     try {
-      responseText = await response.text();
-      console.log('Raw server response:', responseText);
+      setSendingMessage(true);
+
+      const db = getFirestore();
+      await addDoc(collection(db, 'messages'), {
+        gigId: id,
+        senderId: currentUser.uid,
+        senderName: currentUser.displayName || currentUser.email,
+        receiverId: gig.providerId,
+        message: newMessage.trim(),
+        timestamp: new Date().toISOString(),
+        read: false
+      });
+
+      setNewMessage('');
+      toast({
+        title: "Message Sent",
+        description: "Your message has been sent successfully."
+      });
     } catch (err) {
-      console.error('Error reading response:', err);
-      throw new Error('Failed to read server response');
-    }
-
-    // Try to parse as JSON
-    let data;
-    try {
-      data = JSON.parse(responseText);
-      console.log('Parsed response data:', data);
-    } catch (err) {
-      console.error('JSON parse error:', err, 'Response text:', responseText);
-      throw new Error('Invalid JSON response from server');
-    }
-
-    // Validate response structure
-    if (!data || typeof data !== 'object') {
-      throw new Error('Invalid response format: expected object');
-    }
-
-    if (!data.orderID) {
-      throw new Error('Invalid response format: missing orderID');
-    }
-
-    return data.orderID;
-
-  } catch (err) {
-    console.error('Payment creation error:', err);
-    throw new Error(err.message || 'Failed to create payment');
-  }
-};
-
-const handleBuyNow = async () => {
-  if (!currentUser) {
-    setError('Please log in to purchase this gig');
-    return;
-  }
-
-  if (!paypalLoaded) {
-    setError('Payment system is still initializing');
-    return;
-  }
-
-  try {
-    const container = document.getElementById('paypal-button-container');
-    if (!container) {
-      throw new Error('PayPal container not found');
-    }
-    container.innerHTML = '';
-
-    await window.paypal.Buttons({
-      createOrder: async () => {
-        try {
-          setError(''); // Clear any existing errors
-          console.log('Starting PayPal order creation...');
-          const orderId = await createPaymentOrder();
-          console.log('PayPal order created successfully:', orderId);
-          return orderId;
-        } catch (err) {
-          console.error('PayPal order creation failed:', err);
-          setError(err.message);
-          throw err;
-        }
-      },
-
-      onApprove: async (data) => {
-        try {
-          console.log('Payment approved, proceeding with capture:', data);
-          const token = await currentUser.getIdToken();
-          
-          const response = await fetch('https://www.flexhunt.co/api/capture-payment', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${token}`
-            },
-            credentials: 'include',
-            body: JSON.stringify({ 
-              orderID: data.orderID,
-              gigId: id
-            })
-          });
-
-          if (!response.ok) {
-            const errorText = await response.text();
-            console.error('Capture error response:', errorText);
-            throw new Error(`Payment capture failed: ${response.status} ${response.statusText}`);
-          }
-
-          const captureResult = await response.json();
-          console.log('Capture result:', captureResult);
-          
-          // Update Firestore records
-          const db = getFirestore();
-          const batch = writeBatch(db);
-
-          // Update payment record
-          const paymentsRef = collection(db, 'payments');
-          const q = query(paymentsRef, where('paypalOrderId', '==', data.orderID));
-          const querySnapshot = await getDocs(q);
-          
-          if (!querySnapshot.empty) {
-            const paymentDoc = querySnapshot.docs[0];
-            const paymentRef = doc(db, 'payments', paymentDoc.id);
-            
-            batch.update(paymentRef, {
-              status: captureResult.status || 'COMPLETED',
-              updatedAt: serverTimestamp(),
-              completedAt: serverTimestamp(),
-              captureId: captureResult.captureId
-            });
-
-            // Create order record if payment is completed
-            if (captureResult.status === 'COMPLETED') {
-              const orderRef = doc(collection(db, 'orders'));
-              batch.set(orderRef, {
-                gigId: id,
-                gigTitle: gig.title,
-                buyerId: currentUser.uid,
-                buyerEmail: currentUser.email,
-                buyerName: currentUser.displayName || 'Anonymous',
-                sellerId: gig.providerId,
-                sellerEmail: gig.providerEmail || '',
-                sellerName: gig.provider || 'Unknown Provider',
-                paymentId: paymentDoc.id,
-                status: 'PENDING',
-                createdAt: serverTimestamp(),
-                updatedAt: serverTimestamp(),
-                amount: Number(gig.startingPrice),
-                deliveryTime: gig.deliveryTime || '7 days',
-                category: gig.category || 'uncategorized'
-              });
-            }
-
-            await batch.commit();
-            console.log('Payment records updated successfully');
-            navigate('/orders');
-          }
-        } catch (err) {
-          console.error('Payment capture error:', err);
-          setError(err.message || 'Failed to complete payment');
-        }
-      },
-
-      onError: (err) => {
-        console.error('PayPal error:', err);
-        setError('Payment failed. Please try again.');
-      }
-    }).render('#paypal-button-container');
-  } catch (err) {
-    console.error('Payment processing error:', err);
-    setError(err.message || 'Error processing payment');
-  }
-};
-        onCancel: async (data) => {
-          console.log('Payment cancelled:', data?.orderID);
-          if (!data?.orderID) return;
-          
-          try {
-            const db = getFirestore();
-            const paymentsRef = collection(db, 'payments');
-            const q = query(paymentsRef, where('paypalOrderId', '==', data.orderID));
-            const querySnapshot = await getDocs(q);
-            
-            if (!querySnapshot.empty) {
-              const paymentDoc = querySnapshot.docs[0];
-              await updateDoc(doc(db, 'payments', paymentDoc.id), {
-                status: 'CANCELLED',
-                updatedAt: serverTimestamp()
-              });
-            }
-          } catch (err) {
-            console.error('Error updating cancelled payment:', err);
-          }
-        }
-      }).render('#paypal-button-container');
-    } catch (err) {
-      console.error('Payment processing error:', err);
-      setError(err.message || 'Error processing payment');
+      console.error('Error sending message:', err);
+      toast({
+        variant: "destructive",
+        title: "Message Failed",
+        description: "Failed to send message. Please try again."
+      });
+    } finally {
+      setSendingMessage(false);
     }
   };
 
