@@ -44,7 +44,7 @@ const GigDetails = () => {
   const [chatOpen, setChatOpen] = useState(false);
   const [paypalLoaded, setPaypalLoaded] = useState(false);
   const [sendingMessage, setSendingMessage] = useState(false);
-  useEffect(() => {
+    useEffect(() => {
     const fetchGig = async () => {
       try {
         const db = getFirestore();
@@ -52,7 +52,7 @@ const GigDetails = () => {
         
         if (gigDoc.exists()) {
           const gigData = { id: gigDoc.id, ...gigDoc.data() };
-          console.log('Fetched gig data:', gigData); // Debug log
+          console.log('Fetched gig data:', gigData);
           setGig(gigData);
         } else {
           setError('Gig not found');
@@ -78,10 +78,10 @@ const GigDetails = () => {
     const lastMessage = userDoc.data().lastMessage;
     if (!lastMessage) return true;
     
-    // Rate limit: 1 message per 2 seconds
     const timeSinceLastMessage = Date.now() - new Date(lastMessage).getTime();
     return timeSinceLastMessage > 2000;
   };
+
   const messageSchema = z.object({
     message: z.string()
       .min(1, 'Message cannot be empty')
@@ -134,12 +134,10 @@ const GigDetails = () => {
     try {
       setSendingMessage(true);
 
-      // Validate message
       const validatedData = messageSchema.parse({
         message: newMessage
       });
 
-      // Rate limiting check
       const canSendMessage = await checkMessageRateLimit(currentUser.uid);
       if (!canSendMessage) {
         toast({
@@ -163,7 +161,6 @@ const GigDetails = () => {
 
       setNewMessage('');
       
-      // Update last message timestamp for rate limiting
       await updateMessageTimestamp(currentUser.uid);
 
       toast({
@@ -192,264 +189,229 @@ const GigDetails = () => {
 
   useEffect(() => {
     const loadPaypalScript = () => {
-      // Check if PayPal script is already loaded
       if (window.paypal) {
         setPaypalLoaded(true);
         return;
       }
 
-      // Create PayPal script element
       const script = document.createElement('script');
       script.src = 'https://www.paypal.com/sdk/js?client-id=Ael-tHA9_mkr9yKohQV7M3O_LUq7ZfHAAA002cENIRptQc15oNItGBYhkXV0JHFoiTIeRz6F6apyUec2';
       script.async = true;
-          
-          script.onload = () => {
-            setPaypalLoaded(true);
-          };
-          
-          script.onerror = () => {
-            console.error('Failed to load PayPal SDK');
-            setError('Failed to initialize payment system');
-          };
-    
-          document.body.appendChild(script);
-        };
-    
-        loadPaypalScript();
-    
-        // Cleanup
-        return () => {
-          const paypalScript = document.querySelector('script[src*="paypal"]');
-          if (paypalScript) {
-            paypalScript.remove();
-          }
-        };
-      }, []);
-    
-const createPaymentOrder = async () => {
-  if (!currentUser || !gig) {
-    throw new Error('Missing user or gig data');
-  }
+      
+      script.onload = () => {
+        setPaypalLoaded(true);
+      };
+      
+      script.onerror = () => {
+        console.error('Failed to load PayPal SDK');
+        setError('Failed to initialize payment system');
+      };
 
-  try {
-    // Get token
-    const token = await currentUser.getIdToken();
-    
-    // Create payload
-    const payload = {
-      gigId: id,
-      buyerId: currentUser.uid,
-      amount: parseFloat(gig.startingPrice)
+      document.body.appendChild(script);
     };
 
-    console.log('Sending payment creation request:', payload);
+    loadPaypalScript();
 
-    // Make API request
-    const response = await fetch('https://www.flexhunt.co/api/create-payment', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      credentials: 'include',
-      body: JSON.stringify(payload)
-    });
-
-    console.log('Server response status:', response.status);
-
-    // Get response text first to debug any issues
-    const responseText = await response.text();
-    console.log('Raw response:', responseText);
-
-    // Try to parse the response
-    let data;
-    try {
-      data = JSON.parse(responseText);
-    } catch (err) {
-      console.error('Failed to parse response:', err);
-      throw new Error('Invalid response format');
-    }
-
-    // Check for error response
-    if (!data.success) {
-      throw new Error(data.error || 'Payment creation failed');
-    }
-
-    // Validate response data
-    if (!data.orderID) {
-      throw new Error('Missing order ID in response');
-    }
-
-    console.log('Payment order created successfully:', data);
-
-    return data.orderID;
-
-  } catch (err) {
-    console.error('Payment creation error:', err);
-    throw new Error(`Payment creation failed: ${err.message}`);
-  }
-};
-
-const handleBuyNow = async () => {
-  if (!currentUser) {
-    setError('Please log in to purchase this gig');
-    return;
-  }
-
-  if (!paypalLoaded) {
-    setError('Payment system is still initializing');
-    return;
-  }
-
-  try {
-    const container = document.getElementById('paypal-button-container');
-    if (!container) {
-      throw new Error('PayPal container not found');
-    }
-    container.innerHTML = '';
-
-    await window.paypal.Buttons({
-      createOrder: async () => {
-        try {
-          console.log('Starting PayPal order creation...');
-          const orderId = await createPaymentOrder();
-          console.log('PayPal order created:', orderId);
-          return orderId;
-        } catch (err) {
-          console.error('PayPal order creation failed:', err);
-          setError(err.message);
-          throw err;
-        }
-      },
-
-      onApprove: async (data) => {
-        try {
-          console.log('Payment approved, capturing payment:', data);
-          const token = await currentUser.getIdToken();
-          
-          const response = await fetch('https://www.flexhunt.co/api/capture-payment', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${token}`
-            },
-            credentials: 'include',
-            body: JSON.stringify({ orderID: data.orderID })
-          });
-
-          if (!response.ok) {
-            throw new Error('Payment capture failed');
-          }
-
-          const result = await response.json();
-          console.log('Payment captured:', result);
-
-          if (result.status === 'COMPLETED') {
-            navigate('/orders');
-          }
-        } catch (err) {
-          console.error('Payment capture error:', err);
-          setError('Failed to complete payment');
-        }
-      },
-
-      onError: (err) => {
-        console.error('PayPal error:', err);
-        setError('Payment processing failed');
+    return () => {
+      const paypalScript = document.querySelector('script[src*="paypal"]');
+      if (paypalScript) {
+        paypalScript.remove();
       }
-    }).render('#paypal-button-container');
+    };
+  }, []);
 
-  } catch (err) {
-    console.error('Payment setup error:', err);
-    setError(err.message || 'Failed to setup payment');
-  }
-};
+  const createPaymentOrder = async () => {
+    if (!currentUser || !gig) {
+      throw new Error('Missing user or gig data');
+    }
 
-          const captureResult = await response.json();
-          console.log('Payment captured successfully:', captureResult);
+    try {
+      const token = await currentUser.getIdToken();
+      
+      const payload = {
+        gigId: id,
+        buyerId: currentUser.uid,
+        amount: parseFloat(gig.startingPrice)
+      };
 
-          // Update payment status in Firestore
-          const db = getFirestore();
-          const paymentsRef = collection(db, 'payments');
-          const q = query(paymentsRef, where('paypalOrderId', '==', data.orderID));
-          const querySnapshot = await getDocs(q);
-          
-          if (!querySnapshot.empty) {
-            const paymentDoc = querySnapshot.docs[0];
+      console.log('Sending payment creation request:', payload);
+
+      const response = await fetch('https://www.flexhunt.co/api/create-payment', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+
+      console.log('Server response status:', response.status);
+
+      const responseText = await response.text();
+      console.log('Raw response:', responseText);
+
+      let data;
+      try {
+        data = JSON.parse(responseText);
+      } catch (err) {
+        console.error('Failed to parse response:', err);
+        throw new Error('Invalid response format');
+      }
+
+      if (!data.success) {
+        throw new Error(data.error || 'Payment creation failed');
+      }
+
+      if (!data.orderID) {
+        throw new Error('Missing order ID in response');
+      }
+
+      console.log('Payment order created successfully:', data);
+
+      return data.orderID;
+
+    } catch (err) {
+      console.error('Payment creation error:', err);
+      throw new Error(`Payment creation failed: ${err.message}`);
+    }
+  };
+
+  const handleBuyNow = async () => {
+    if (!currentUser) {
+      setError('Please log in to purchase this gig');
+      return;
+    }
+
+    if (!paypalLoaded) {
+      setError('Payment system is still initializing');
+      return;
+    }
+
+    try {
+      const container = document.getElementById('paypal-button-container');
+      if (!container) {
+        throw new Error('PayPal container not found');
+      }
+      container.innerHTML = '';
+
+      await window.paypal.Buttons({
+        createOrder: async () => {
+          try {
+            console.log('Starting PayPal order creation...');
+            const orderId = await createPaymentOrder();
+            console.log('PayPal order created:', orderId);
+            return orderId;
+          } catch (err) {
+            console.error('PayPal order creation failed:', err);
+            setError(err.message);
+            throw err;
+          }
+        },
+
+        onApprove: async (data) => {
+          try {
+            console.log('Payment approved, capturing payment:', data);
+            const token = await currentUser.getIdToken();
             
-            const updateData = {
-              status: captureResult.status || 'COMPLETED',
-              updatedAt: serverTimestamp(),
-              completedAt: serverTimestamp()
-            };
-            
-            if (captureResult.captureId) {
-              updateData.captureId = captureResult.captureId;
+            const response = await fetch('https://www.flexhunt.co/api/capture-payment', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+              },
+              credentials: 'include',
+              body: JSON.stringify({ orderID: data.orderID })
+            });
+
+            if (!response.ok) {
+              throw new Error('Payment capture failed');
             }
 
-            await updateDoc(doc(db, 'payments', paymentDoc.id), updateData);
+            const captureResult = await response.json();
+            console.log('Payment captured successfully:', captureResult);
 
-            // Create order if payment is completed
-            if (captureResult.status === 'COMPLETED') {
-              await addDoc(collection(db, 'orders'), {
-                gigId: id,
-                gigTitle: gig.title,
-                buyerId: currentUser.uid,
-                buyerEmail: currentUser.email,
-                buyerName: currentUser.displayName || 'Anonymous',
-                sellerId: gig.providerId,
-                sellerEmail: gig.providerEmail || '',
-                sellerName: gig.provider || 'Unknown Provider',
-                paymentId: paymentDoc.id,
-                status: 'PENDING',
-                createdAt: serverTimestamp(),
+            const db = getFirestore();
+            const paymentsRef = collection(db, 'payments');
+            const q = query(paymentsRef, where('paypalOrderId', '==', data.orderID));
+            const querySnapshot = await getDocs(q);
+            
+            if (!querySnapshot.empty) {
+              const paymentDoc = querySnapshot.docs[0];
+              
+              const updateData = {
+                status: captureResult.status || 'COMPLETED',
                 updatedAt: serverTimestamp(),
-                amount: Number(gig.startingPrice),
-                deliveryTime: gig.deliveryTime || '7 days',
-                category: gig.category || 'uncategorized'
+                completedAt: serverTimestamp()
+              };
+              
+              if (captureResult.captureId) {
+                updateData.captureId = captureResult.captureId;
+              }
+
+              await updateDoc(doc(db, 'payments', paymentDoc.id), updateData);
+
+              if (captureResult.status === 'COMPLETED') {
+                await addDoc(collection(db, 'orders'), {
+                  gigId: id,
+                  gigTitle: gig.title,
+                  buyerId: currentUser.uid,
+                  buyerEmail: currentUser.email,
+                  buyerName: currentUser.displayName || 'Anonymous',
+                  sellerId: gig.providerId,
+                  sellerEmail: gig.providerEmail || '',
+                  sellerName: gig.provider || 'Unknown Provider',
+                  paymentId: paymentDoc.id,
+                  status: 'PENDING',
+                  createdAt: serverTimestamp(),
+                  updatedAt: serverTimestamp(),
+                  amount: Number(gig.startingPrice),
+                  deliveryTime: gig.deliveryTime || '7 days',
+                  category: gig.category || 'uncategorized'
+                });
+              }
+
+              navigate('/orders');
+            }
+          } catch (err) {
+            console.error('Payment capture error:', err);
+            setError(err.message || 'Failed to complete payment');
+          }
+        },
+
+        onError: (err) => {
+          console.error('PayPal error:', err);
+          setError('Payment failed. Please try again.');
+        },
+
+        onCancel: async (data) => {
+          console.log('Payment cancelled:', data?.orderID);
+          if (!data?.orderID) return;
+          
+          try {
+            const db = getFirestore();
+            const paymentsRef = collection(db, 'payments');
+            const q = query(paymentsRef, where('paypalOrderId', '==', data.orderID));
+            const querySnapshot = await getDocs(q);
+            
+            if (!querySnapshot.empty) {
+              const paymentDoc = querySnapshot.docs[0];
+              await updateDoc(doc(db, 'payments', paymentDoc.id), {
+                status: 'CANCELLED',
+                updatedAt: serverTimestamp()
               });
             }
-
-            navigate('/orders');
+          } catch (err) {
+            console.error('Error updating cancelled payment:', err);
           }
-        } catch (err) {
-          console.error('Payment capture error:', err);
-          setError(err.message || 'Failed to complete payment');
         }
-      },
+      }).render('#paypal-button-container');
+    } catch (err) {
+      console.error('Payment processing error:', err);
+      setError(err.message || 'Error processing payment');
+    }
+  };
 
-      onError: (err) => {
-        console.error('PayPal error:', err);
-        setError('Payment failed. Please try again.');
-      },
-
-      onCancel: async (data) => {
-        console.log('Payment cancelled:', data?.orderID);
-        if (!data?.orderID) return;
-        
-        try {
-          const db = getFirestore();
-          const paymentsRef = collection(db, 'payments');
-          const q = query(paymentsRef, where('paypalOrderId', '==', data.orderID));
-          const querySnapshot = await getDocs(q);
-          
-          if (!querySnapshot.empty) {
-            const paymentDoc = querySnapshot.docs[0];
-            await updateDoc(doc(db, 'payments', paymentDoc.id), {
-              status: 'CANCELLED',
-              updatedAt: serverTimestamp()
-            });
-          }
-        } catch (err) {
-          console.error('Error updating cancelled payment:', err);
-        }
-      }
-    }).render('#paypal-button-container');
-  } catch (err) {
-    console.error('Payment processing error:', err);
-    setError(err.message || 'Error processing payment');
-  }
-};
   if (loading) return <div className="text-center mt-8">Loading...</div>;
   if (error) return (
     <Alert variant="destructive" className="max-w-2xl mx-auto mt-8">
