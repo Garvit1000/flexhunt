@@ -220,195 +220,200 @@ const GigDetails = () => {
     };
   }, []);
 
-  const createPaymentOrder = async () => {
-    if (!currentUser || !gig) {
-      throw new Error('Missing user or gig data');
+const createPaymentOrder = async () => {
+  if (!currentUser || !gig) {
+    throw new Error('Missing user or gig data');
+  }
+
+  try {
+    const token = await currentUser.getIdToken();
+    
+    const payload = {
+      gigId: id,
+      buyerId: currentUser.uid,
+      amount: parseFloat(gig.startingPrice),
+      currency: 'USD',
+      description: `Payment for ${gig.title}`
+    };
+
+    console.log('Sending payment creation request with payload:', payload);
+
+    const response = await fetch('https://www.flexhunt.co/api/create-payment', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      credentials: 'include',
+      body: JSON.stringify(payload)
+    });
+
+    // First check if response is ok
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Server error response:', errorText);
+      throw new Error(`Payment creation failed: ${response.status} ${response.statusText}`);
     }
 
+    // Safely parse the response
+    let responseText;
     try {
-      const token = await currentUser.getIdToken();
-      
-      const payload = {
-        gigId: id,
-        buyerId: currentUser.uid,
-        amount: parseFloat(gig.startingPrice),
-        currency: 'USD', // Add currency specification
-        description: `Payment for ${gig.title}` // Add description
-      };
-
-      const response = await fetch('https://www.flexhunt.co/api/create-payment', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        credentials: 'include',
-        body: JSON.stringify(payload)
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        try {
-          const errorJson = JSON.parse(errorText);
-          throw new Error(errorJson.error || 'Payment creation failed');
-        } catch (e) {
-          throw new Error(`Payment creation failed: ${errorText}`);
-        }
-      }
-
-      let data;
-      try {
-        const responseText = await response.text();
-        data = JSON.parse(responseText);
-      } catch (err) {
-        console.error('Failed to parse response:', err);
-        throw new Error('Invalid response format from server');
-      }
-
-      // Validate the response structure
-      const responseSchema = z.object({
-        success: z.boolean(),
-        orderID: z.string(),
-        status: z.string().optional()
-      });
-
-      try {
-        const validatedData = responseSchema.parse(data);
-        if (!validatedData.success) {
-          throw new Error(data.error || 'Payment creation failed');
-        }
-        return validatedData.orderID;
-      } catch (err) {
-        console.error('Response validation error:', err);
-        throw new Error('Invalid response format from server');
-      }
-
+      responseText = await response.text();
+      console.log('Raw server response:', responseText);
     } catch (err) {
-      console.error('Payment creation error:', err);
-      throw new Error(err.message || 'Failed to create payment');
-    }
-  };
-
-  const handleBuyNow = async () => {
-    if (!currentUser) {
-      setError('Please log in to purchase this gig');
-      return;
+      console.error('Error reading response:', err);
+      throw new Error('Failed to read server response');
     }
 
-    if (!paypalLoaded) {
-      setError('Payment system is still initializing');
-      return;
-    }
-
+    // Try to parse as JSON
+    let data;
     try {
-      const container = document.getElementById('paypal-button-container');
-      if (!container) {
-        throw new Error('PayPal container not found');
-      }
-      container.innerHTML = '';
+      data = JSON.parse(responseText);
+      console.log('Parsed response data:', data);
+    } catch (err) {
+      console.error('JSON parse error:', err, 'Response text:', responseText);
+      throw new Error('Invalid JSON response from server');
+    }
 
-      await window.paypal.Buttons({
-        createOrder: async () => {
-          try {
-            setError(''); // Clear any existing errors
-            console.log('Starting PayPal order creation...');
-            const orderId = await createPaymentOrder();
-            console.log('PayPal order created:', orderId);
-            return orderId;
-          } catch (err) {
-            console.error('PayPal order creation failed:', err);
-            setError(err.message);
-            throw err;
+    // Validate response structure
+    if (!data || typeof data !== 'object') {
+      throw new Error('Invalid response format: expected object');
+    }
+
+    if (!data.orderID) {
+      throw new Error('Invalid response format: missing orderID');
+    }
+
+    return data.orderID;
+
+  } catch (err) {
+    console.error('Payment creation error:', err);
+    throw new Error(err.message || 'Failed to create payment');
+  }
+};
+
+const handleBuyNow = async () => {
+  if (!currentUser) {
+    setError('Please log in to purchase this gig');
+    return;
+  }
+
+  if (!paypalLoaded) {
+    setError('Payment system is still initializing');
+    return;
+  }
+
+  try {
+    const container = document.getElementById('paypal-button-container');
+    if (!container) {
+      throw new Error('PayPal container not found');
+    }
+    container.innerHTML = '';
+
+    await window.paypal.Buttons({
+      createOrder: async () => {
+        try {
+          setError(''); // Clear any existing errors
+          console.log('Starting PayPal order creation...');
+          const orderId = await createPaymentOrder();
+          console.log('PayPal order created successfully:', orderId);
+          return orderId;
+        } catch (err) {
+          console.error('PayPal order creation failed:', err);
+          setError(err.message);
+          throw err;
+        }
+      },
+
+      onApprove: async (data) => {
+        try {
+          console.log('Payment approved, proceeding with capture:', data);
+          const token = await currentUser.getIdToken();
+          
+          const response = await fetch('https://www.flexhunt.co/api/capture-payment', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`
+            },
+            credentials: 'include',
+            body: JSON.stringify({ 
+              orderID: data.orderID,
+              gigId: id
+            })
+          });
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            console.error('Capture error response:', errorText);
+            throw new Error(`Payment capture failed: ${response.status} ${response.statusText}`);
           }
-        },
 
-        onApprove: async (data) => {
-          try {
-            console.log('Payment approved, capturing payment:', data);
-            const token = await currentUser.getIdToken();
+          const captureResult = await response.json();
+          console.log('Capture result:', captureResult);
+          
+          // Update Firestore records
+          const db = getFirestore();
+          const batch = writeBatch(db);
+
+          // Update payment record
+          const paymentsRef = collection(db, 'payments');
+          const q = query(paymentsRef, where('paypalOrderId', '==', data.orderID));
+          const querySnapshot = await getDocs(q);
+          
+          if (!querySnapshot.empty) {
+            const paymentDoc = querySnapshot.docs[0];
+            const paymentRef = doc(db, 'payments', paymentDoc.id);
             
-            const response = await fetch('https://www.flexhunt.co/api/capture-payment', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`
-              },
-              credentials: 'include',
-              body: JSON.stringify({ 
-                orderID: data.orderID,
-                gigId: id
-              })
+            batch.update(paymentRef, {
+              status: captureResult.status || 'COMPLETED',
+              updatedAt: serverTimestamp(),
+              completedAt: serverTimestamp(),
+              captureId: captureResult.captureId
             });
 
-            if (!response.ok) {
-              const errorText = await response.text();
-              try {
-                const errorJson = JSON.parse(errorText);
-                throw new Error(errorJson.error || 'Payment capture failed');
-              } catch (e) {
-                throw new Error(`Payment capture failed: ${errorText}`);
-              }
-            }
-
-            const captureResult = await response.json();
-            
-            // Update Firestore records
-            const db = getFirestore();
-            const batch = writeBatch(db);
-
-            // Update payment record
-            const paymentsRef = collection(db, 'payments');
-            const q = query(paymentsRef, where('paypalOrderId', '==', data.orderID));
-            const querySnapshot = await getDocs(q);
-            
-            if (!querySnapshot.empty) {
-              const paymentDoc = querySnapshot.docs[0];
-              const paymentRef = doc(db, 'payments', paymentDoc.id);
-              
-              batch.update(paymentRef, {
-                status: captureResult.status || 'COMPLETED',
+            // Create order record if payment is completed
+            if (captureResult.status === 'COMPLETED') {
+              const orderRef = doc(collection(db, 'orders'));
+              batch.set(orderRef, {
+                gigId: id,
+                gigTitle: gig.title,
+                buyerId: currentUser.uid,
+                buyerEmail: currentUser.email,
+                buyerName: currentUser.displayName || 'Anonymous',
+                sellerId: gig.providerId,
+                sellerEmail: gig.providerEmail || '',
+                sellerName: gig.provider || 'Unknown Provider',
+                paymentId: paymentDoc.id,
+                status: 'PENDING',
+                createdAt: serverTimestamp(),
                 updatedAt: serverTimestamp(),
-                completedAt: serverTimestamp(),
-                captureId: captureResult.captureId
+                amount: Number(gig.startingPrice),
+                deliveryTime: gig.deliveryTime || '7 days',
+                category: gig.category || 'uncategorized'
               });
-
-              // Create order record if payment is completed
-              if (captureResult.status === 'COMPLETED') {
-                const orderRef = doc(collection(db, 'orders'));
-                batch.set(orderRef, {
-                  gigId: id,
-                  gigTitle: gig.title,
-                  buyerId: currentUser.uid,
-                  buyerEmail: currentUser.email,
-                  buyerName: currentUser.displayName || 'Anonymous',
-                  sellerId: gig.providerId,
-                  sellerEmail: gig.providerEmail || '',
-                  sellerName: gig.provider || 'Unknown Provider',
-                  paymentId: paymentDoc.id,
-                  status: 'PENDING',
-                  createdAt: serverTimestamp(),
-                  updatedAt: serverTimestamp(),
-                  amount: Number(gig.startingPrice),
-                  deliveryTime: gig.deliveryTime || '7 days',
-                  category: gig.category || 'uncategorized'
-                });
-              }
-
-              // Commit all changes
-              await batch.commit();
-              navigate('/orders');
             }
-          } catch (err) {
-            console.error('Payment capture error:', err);
-            setError(err.message || 'Failed to complete payment');
+
+            await batch.commit();
+            console.log('Payment records updated successfully');
+            navigate('/orders');
           }
-        },
+        } catch (err) {
+          console.error('Payment capture error:', err);
+          setError(err.message || 'Failed to complete payment');
+        }
+      },
 
-        onError: (err) => {
-          console.error('PayPal error:', err);
-          setError('Payment failed. Please try again.');
-        },
-
+      onError: (err) => {
+        console.error('PayPal error:', err);
+        setError('Payment failed. Please try again.');
+      }
+    }).render('#paypal-button-container');
+  } catch (err) {
+    console.error('Payment processing error:', err);
+    setError(err.message || 'Error processing payment');
+  }
+};
         onCancel: async (data) => {
           console.log('Payment cancelled:', data?.orderID);
           if (!data?.orderID) return;
