@@ -25,47 +25,58 @@ app.use((err, req, res, next) => {
   });
 });
 // PayPal Configuration
-const environment = process.env.NODE_ENV === 'production'
-  ? paypal.core.LiveEnvironment
-  : paypal.core.SandboxEnvironment;
+let paypalClient;
+try {
+  const environment = process.env.NODE_ENV === 'production'
+    ? paypal.core.LiveEnvironment
+    : paypal.core.SandboxEnvironment;
 
-const paypalClient = new paypal.core.PayPalHttpClient(
-  new environment(
-    process.env.PAYPAL_CLIENT_ID,
-    process.env.PAYPAL_CLIENT_SECRET
-  )
-);
+  paypalClient = new paypal.core.PayPalHttpClient(
+    new environment(
+      process.env.PAYPAL_CLIENT_ID,
+      process.env.PAYPAL_CLIENT_SECRET
+    )
+  );
+} catch (error) {
+  console.error('PayPal client initialization error:', error);
+}
 
-// Routes
-app.post('/api/create-payment', async (req, res) => {
+// Validation middleware
+const validatePaymentRequest = (req, res, next) => {
+  const { gigId, buyerId, amount } = req.body;
+  
+  if (!gigId || !buyerId || !amount) {
+    return res.status(400).json({
+      success: false,
+      error: 'Missing required fields',
+      details: { gigId, buyerId, amount }
+    });
+  }
+
+  const parsedAmount = parseFloat(amount);
+  if (isNaN(parsedAmount) || parsedAmount <= 0) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid amount'
+    });
+  }
+
+  req.parsedAmount = parsedAmount;
+  next();
+};
+
+// Updated payment creation route
+app.post('/api/create-payment', validatePaymentRequest, async (req, res) => {
   try {
-    // Log incoming request
     console.log('Payment creation request received:', {
       body: req.body,
       headers: req.headers
     });
 
-    const { gigId, buyerId, amount } = req.body;
+    const { gigId, buyerId } = req.body;
+    const parsedAmount = req.parsedAmount;
 
-    // Validate inputs
-    if (!gigId || !buyerId || !amount) {
-      console.log('Missing required fields:', { gigId, buyerId, amount });
-      return res.status(400).json({
-        success: false,
-        error: 'Missing required fields'
-      });
-    }
-
-    // Validate amount
-    const parsedAmount = parseFloat(amount);
-    if (isNaN(parsedAmount) || parsedAmount <= 0) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid amount'
-      });
-    }
-
-    // Get gig details
+    // Get gig details with error handling
     const gigDoc = await db.collection('gigs').doc(gigId).get();
     if (!gigDoc.exists) {
       return res.status(404).json({
@@ -76,56 +87,71 @@ app.post('/api/create-payment', async (req, res) => {
 
     const gig = gigDoc.data();
 
-    // Create PayPal order
-    const request = new paypal.orders.OrdersCreateRequest();
-    request.prefer("return=representation");
-    request.requestBody({
-      intent: 'CAPTURE',
-      purchase_units: [{
-        amount: {
-          currency_code: 'USD',
-          value: parsedAmount.toFixed(2)
-        },
-        description: `Payment for: ${gig.title || 'Gig Service'}`
-      }]
-    });
+    // Create PayPal order with enhanced error handling
+    try {
+      const request = new paypal.orders.OrdersCreateRequest();
+      request.prefer("return=representation");
+      request.requestBody({
+        intent: 'CAPTURE',
+        purchase_units: [{
+          amount: {
+            currency_code: 'USD',
+            value: parsedAmount.toFixed(2)
+          },
+          description: `Payment for: ${gig.title || 'Gig Service'}`
+        }]
+      });
 
-    console.log('Sending request to PayPal');
-    const order = await paypalClient.execute(request);
-    console.log('PayPal response received:', order.result);
+      console.log('Sending request to PayPal');
+      const order = await paypalClient.execute(request);
+      
+      if (!order || !order.result || !order.result.id) {
+        throw new Error('Invalid PayPal response structure');
+      }
 
-    // Validate PayPal response
-    if (!order.result || !order.result.id) {
-      throw new Error('Invalid PayPal response');
+      console.log('PayPal response received:', order.result);
+
+      // Create payment record with transaction
+      const paymentRef = await db.runTransaction(async (transaction) => {
+        const newPaymentRef = db.collection('payments').doc();
+        
+        await transaction.set(newPaymentRef, {
+          gigId,
+          buyerId,
+          sellerId: gig.providerId,
+          amount: parsedAmount,
+          status: 'PENDING',
+          paypalOrderId: order.result.id,
+          createdAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        return newPaymentRef;
+      });
+
+      return res.status(200).json({
+        success: true,
+        orderID: order.result.id,
+        paymentId: paymentRef.id
+      });
+
+    } catch (paypalError) {
+      console.error('PayPal order creation error:', paypalError);
+      return res.status(400).json({
+        success: false,
+        error: 'PayPal order creation failed',
+        details: paypalError.message
+      });
     }
-
-    // Create payment record
-    const paymentRef = await db.collection('payments').add({
-      gigId,
-      buyerId,
-      sellerId: gig.providerId,
-      amount: parsedAmount,
-      status: 'PENDING',
-      paypalOrderId: order.result.id,
-      createdAt: admin.firestore.FieldValue.serverTimestamp()
-    });
-
-    // Send successful response
-    return res.status(200).json({
-      success: true,
-      orderID: order.result.id,
-      paymentId: paymentRef.id
-    });
 
   } catch (error) {
     console.error('Payment creation error:', error);
     return res.status(500).json({
       success: false,
-      error: error.message || 'Payment creation failed'
+      error: 'Payment creation failed',
+      details: error.message
     });
   }
 });
-
 
 app.post('/api/capture-payment', async (req, res) => {
   try {
