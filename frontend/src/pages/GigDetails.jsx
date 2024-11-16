@@ -323,7 +323,7 @@ const GigDetails = () => {
                 gigId: id,
                 paymentId: paymentId,
                 buyerId: currentUser.uid,
-                amount: gig.startingPrice
+                amount: Number(gig.startingPrice)
               })
             });
 
