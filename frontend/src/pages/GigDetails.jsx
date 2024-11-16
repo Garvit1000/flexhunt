@@ -48,12 +48,15 @@ const GigDetails = () => {
   const API_BASE_URL = process.env.NODE_ENV === 'production'
     ? 'https://www.flexhunt.co'  // Your production domain
     : 'http://localhost:5000';   // Local development server
-  const getApiBaseUrl = () => {
-    if (window.location.hostname === 'localhost') {
+ const getApiBaseUrl = () => {
+    const hostname = window.location.hostname;
+    if (hostname === 'localhost') {
       return 'http://localhost:5000';
+    } else if (hostname === 'flexhunt.co') {
+      return 'https://flexhunt.co';
     }
-    // Replace with your Render.com URL
-    return 'https://www.flexhunt.co';
+    // Fallback for other domains
+    return 'https://flexhunt.co';
   };
   useEffect(() => {
     const fetchGig = async () => {
@@ -203,23 +206,22 @@ const GigDetails = () => {
 
   useEffect(() => {
     const loadPaypalScript = () => {
-      // Check if PayPal script is already loaded
       if (window.paypal) {
         setPaypalLoaded(true);
         return;
       }
 
-      // Create PayPal script element
       const script = document.createElement('script');
-      script.src = 'https://www.paypal.com/sdk/js?client-id=Ael-tHA9_mkr9yKohQV7M3O_LUq7ZfHAAA002cENIRptQc15oNItGBYhkXV0JHFoiTIeRz6F6apyUec2';
+      // Add currency and intent parameters
+      script.src = `https://www.paypal.com/sdk/js?client-id=Ael-tHA9_mkr9yKohQV7M3O_LUq7ZfHAAA002cENIRptQc15oNItGBYhkXV0JHFoiTIeRz6F6apyUec2&currency=USD&intent=capture`;
       script.async = true;
 
       script.onload = () => {
         setPaypalLoaded(true);
       };
 
-      script.onerror = () => {
-        console.error('Failed to load PayPal SDK');
+      script.onerror = (err) => {
+        console.error('Failed to load PayPal SDK:', err);
         setError('Failed to initialize payment system');
       };
 
@@ -228,7 +230,6 @@ const GigDetails = () => {
 
     loadPaypalScript();
 
-    // Cleanup
     return () => {
       const paypalScript = document.querySelector('script[src*="paypal"]');
       if (paypalScript) {
@@ -295,7 +296,7 @@ const GigDetails = () => {
     }
   };
 
-  const handleBuyNow = async () => {
+ const handleBuyNow = async () => {
     if (!currentUser) {
       setError('Please log in to purchase this gig');
       return;
@@ -312,45 +313,45 @@ const GigDetails = () => {
         container.innerHTML = '';
       }
 
-      window.paypal.Buttons({
+      const paypalButtons = window.paypal.Buttons({
+        fundingSource: window.paypal.FUNDING.PAYPAL,
+        style: {
+          layout: 'vertical',
+          color: 'blue',
+          shape: 'rect',
+          label: 'pay'
+        },
         createOrder: async () => {
           try {
             const paymentId = await createPaymentOrder();
             const API_BASE_URL = getApiBaseUrl();
-
-            console.log('Creating PayPal order with:', {
-              gigId: id,
-              paymentId,
-              buyerId: currentUser.uid,
-              amount: gig.startingPrice,
-              title: gig.title
-            });
-
             const token = await currentUser.getIdToken();
+
             const response = await fetch(`${API_BASE_URL}/api/create-payment`, {
               method: 'POST',
-              credentials: 'include',
               headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${token}`
               },
               body: JSON.stringify({
                 gigId: id,
-                paymentId: paymentId,
+                paymentId,
                 buyerId: currentUser.uid,
                 amount: gig.startingPrice,
-                title: gig.title
+                title: gig.title,
+                currency: 'USD'
               })
             });
 
             if (!response.ok) {
-              const errorData = await response.text();
-              console.error('Server error response:', errorData);
-              throw new Error(`Server error: ${response.status} - ${errorData}`);
+              throw new Error(`Server error: ${response.status}`);
             }
 
             const data = await response.json();
-            console.log('Order created successfully:', data);
+            if (!data.orderID) {
+              throw new Error('No orderID received from server');
+            }
+
             return data.orderID;
           } catch (err) {
             console.error('Error creating order:', err);
@@ -358,16 +359,13 @@ const GigDetails = () => {
             throw err;
           }
         },
-        onApprove: async (data, actions) => {
+        onApprove: async (data) => {
           try {
             const API_BASE_URL = getApiBaseUrl();
             const token = await currentUser.getIdToken();
 
-            console.log('Capturing payment for order:', data.orderID);
-
-            const captureResponse = await fetch(`${API_BASE_URL}/api/capture-payment`, {
+            const response = await fetch(`${API_BASE_URL}/api/capture-payment`, {
               method: 'POST',
-              credentials: 'include',
               headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${token}`
@@ -377,15 +375,11 @@ const GigDetails = () => {
               })
             });
 
-            if (!captureResponse.ok) {
-              const errorData = await captureResponse.text();
-              console.error('Capture error response:', errorData);
-              throw new Error(`Failed to capture payment: ${errorData}`);
+            if (!response.ok) {
+              throw new Error(`Failed to capture payment: ${response.status}`);
             }
 
-            const captureResult = await captureResponse.json();
-            console.log('Payment captured successfully:', captureResult);
-
+            const captureResult = await response.json();
             if (captureResult.status === 'COMPLETED') {
               navigate('/orders');
             }
@@ -398,7 +392,15 @@ const GigDetails = () => {
           console.error('PayPal error:', err);
           setError(`Payment failed: ${err.message || 'Unknown error'}`);
         }
-      }).render('#paypal-button-container');
+      });
+
+      // Check if the buttons can be rendered before attempting to render
+      const canRender = await paypalButtons.isEligible();
+      if (canRender) {
+        await paypalButtons.render('#paypal-button-container');
+      } else {
+        setError('PayPal payment is not available at this time');
+      }
     } catch (err) {
       console.error('Payment processing error:', err);
       setError(err.message || 'Error processing payment');
