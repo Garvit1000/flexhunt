@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { z } from 'zod';
-import { 
+import {
   Card,
   CardHeader,
   CardTitle,
@@ -14,9 +14,9 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { AlertCircle, MessageCircle, Star, Clock, DollarSign } from 'lucide-react';
 import { useAuth } from '../components/AuthContext';
 import { useToast } from '../hooks/use-toast';
-import { 
-  getFirestore, 
-  doc, 
+import {
+  getFirestore,
+  doc,
   getDoc,
   collection,
   addDoc,
@@ -44,12 +44,16 @@ const GigDetails = () => {
   const [chatOpen, setChatOpen] = useState(false);
   const [paypalLoaded, setPaypalLoaded] = useState(false);
   const [sendingMessage, setSendingMessage] = useState(false);
+
+  const API_BASE_URL = process.env.NODE_ENV === 'production'
+    ? 'https://www.flexhunt.co'  // Your production domain
+    : 'http://localhost:5000';   // Local development server
   useEffect(() => {
     const fetchGig = async () => {
       try {
         const db = getFirestore();
         const gigDoc = await getDoc(doc(db, 'gigs', id));
-        
+
         if (gigDoc.exists()) {
           const gigData = { id: gigDoc.id, ...gigDoc.data() };
           console.log('Fetched gig data:', gigData); // Debug log
@@ -72,12 +76,12 @@ const GigDetails = () => {
     const db = getFirestore();
     const userRef = doc(db, 'users', userId);
     const userDoc = await getDoc(userRef);
-    
+
     if (!userDoc.exists()) return true;
-    
+
     const lastMessage = userDoc.data().lastMessage;
     if (!lastMessage) return true;
-    
+
     // Rate limit: 1 message per 2 seconds
     const timeSinceLastMessage = Date.now() - new Date(lastMessage).getTime();
     return timeSinceLastMessage > 2000;
@@ -92,13 +96,13 @@ const GigDetails = () => {
   const updateMessageTimestamp = async (userId) => {
     const db = getFirestore();
     const userRef = doc(db, 'users', userId);
-    
+
     try {
       await setDoc(userRef, {
         lastMessage: new Date().toISOString(),
         messageCount: increment(1)
       }, { merge: true });
-      
+
       return true;
     } catch (error) {
       console.error('Error updating message timestamp:', error);
@@ -162,7 +166,7 @@ const GigDetails = () => {
       });
 
       setNewMessage('');
-      
+
       // Update last message timestamp for rate limiting
       await updateMessageTimestamp(currentUser.uid);
 
@@ -202,45 +206,43 @@ const GigDetails = () => {
       const script = document.createElement('script');
       script.src = 'https://www.paypal.com/sdk/js?client-id=Ael-tHA9_mkr9yKohQV7M3O_LUq7ZfHAAA002cENIRptQc15oNItGBYhkXV0JHFoiTIeRz6F6apyUec2';
       script.async = true;
-          
-          script.onload = () => {
-            setPaypalLoaded(true);
-          };
-          
-          script.onerror = () => {
-            console.error('Failed to load PayPal SDK');
-            setError('Failed to initialize payment system');
-          };
-    
-          document.body.appendChild(script);
-        };
-    
-        loadPaypalScript();
-    
-        // Cleanup
-        return () => {
-          const paypalScript = document.querySelector('script[src*="paypal"]');
-          if (paypalScript) {
-            paypalScript.remove();
-          }
-        };
-      }, []);
-    
-      
+
+      script.onload = () => {
+        setPaypalLoaded(true);
+      };
+
+      script.onerror = () => {
+        console.error('Failed to load PayPal SDK');
+        setError('Failed to initialize payment system');
+      };
+
+      document.body.appendChild(script);
+    };
+
+    loadPaypalScript();
+
+    // Cleanup
+    return () => {
+      const paypalScript = document.querySelector('script[src*="paypal"]');
+      if (paypalScript) {
+        paypalScript.remove();
+      }
+    };
+  }, []);
+
+
+
   const createPaymentOrder = async () => {
     if (!currentUser || !gig) {
       throw new Error('User or gig data is missing');
     }
 
-    // Debug logging
     console.log('Creating payment for gig:', {
       price: gig.startingPrice,
       providerId: gig.providerId,
-      title: gig.title,
-      fullGig: gig
+      title: gig.title
     });
 
-    // Validate required fields with detailed error message
     const missingFields = [];
     if (!gig.providerId) missingFields.push('providerId');
     if (!gig.title) missingFields.push('title');
@@ -253,7 +255,7 @@ const GigDetails = () => {
     }
 
     const db = getFirestore();
-    
+
     try {
       const paymentData = {
         gigId: id,
@@ -274,7 +276,6 @@ const GigDetails = () => {
         category: gig.category || 'uncategorized'
       };
 
-      // Log the payment data before creation
       console.log('Creating payment with data:', paymentData);
 
       const paymentDoc = await addDoc(collection(db, 'payments'), paymentData);
@@ -286,6 +287,7 @@ const GigDetails = () => {
       throw new Error(`Failed to create payment record: ${err.message}`);
     }
   };
+
   const handleBuyNow = async () => {
     if (!currentUser) {
       setError('Please log in to purchase this gig');
@@ -307,14 +309,19 @@ const GigDetails = () => {
       if (container) {
         container.innerHTML = '';
       }
-
+  
       window.paypal.Buttons({
         createOrder: async () => {
           try {
             const paymentId = await createPaymentOrder();
-
-            const response = await fetch('https://www.flexhunt.co/api/create-payment', {
+            
+            const API_BASE_URL = process.env.NODE_ENV === 'production'
+              ? 'https://www.flexhunt.co'
+              : 'http://localhost:5000';
+  
+            const response = await fetch(`${API_BASE_URL}/api/create-payment`, {
               method: 'POST',
+              credentials: 'include', // Important for CORS with credentials
               headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${await currentUser.getIdToken()}`
@@ -323,27 +330,18 @@ const GigDetails = () => {
                 gigId: id,
                 paymentId: paymentId,
                 buyerId: currentUser.uid,
-                amount: gig.startingPrice
+                amount: gig.startingPrice,
+                title: gig.title
               })
             });
-
+  
             if (!response.ok) {
-              const errorData = await response.json();
-              throw new Error(errorData.message || 'Failed to create PayPal order');
+              const errorText = await response.text();
+              throw new Error(`Server error: ${response.status} - ${errorText}`);
             }
-
-            const data = await response.json();
-            if (!data.orderID) {
-              throw new Error('No order ID received from server');
-            }
-
-            const db = getFirestore();
-            await updateDoc(doc(db, 'payments', paymentId), {
-              paypalOrderId: data.orderID,
-              updatedAt: serverTimestamp()
-            });
-
-            return data.orderID;
+  
+            const responseData = await response.json();
+            return responseData.orderID;
           } catch (err) {
             console.error('Error creating order:', err);
             setError(err.message || 'Failed to create payment order');
@@ -352,8 +350,9 @@ const GigDetails = () => {
         },
         onApprove: async (data, actions) => {
           try {
-            const captureResponse = await fetch('https://www.flexhunt.co/api/capture-payment', {
+            const captureResponse = await fetch(`${API_BASE_URL}/api/capture-payment`, {
               method: 'POST',
+              credentials: 'include',
               headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${await currentUser.getIdToken()}`
@@ -369,30 +368,28 @@ const GigDetails = () => {
             }
 
             const captureResult = await captureResponse.json();
-            
+            console.log('Payment capture result:', captureResult);
+
             const db = getFirestore();
             const paymentsRef = collection(db, 'payments');
             const q = query(paymentsRef, where('paypalOrderId', '==', data.orderID));
             const querySnapshot = await getDocs(q);
-            
+
             if (!querySnapshot.empty) {
               const paymentDoc = querySnapshot.docs[0];
-              
-              // Only update with defined fields
+
               const updateData = {
                 status: captureResult.status || 'COMPLETED',
                 updatedAt: serverTimestamp(),
                 completedAt: serverTimestamp()
               };
-              
-              // Only add captureId if it exists
+
               if (captureResult.captureId) {
                 updateData.captureId = captureResult.captureId;
               }
 
               await updateDoc(doc(db, 'payments', paymentDoc.id), updateData);
 
-              // Create order document only if payment is completed
               if (captureResult.status === 'COMPLETED') {
                 await addDoc(collection(db, 'orders'), {
                   gigId: id,
@@ -426,13 +423,13 @@ const GigDetails = () => {
         },
         onCancel: async (data) => {
           if (!data?.orderID) return;
-          
+
           try {
             const db = getFirestore();
             const paymentsRef = collection(db, 'payments');
             const q = query(paymentsRef, where('paypalOrderId', '==', data.orderID));
             const querySnapshot = await getDocs(q);
-            
+
             if (!querySnapshot.empty) {
               const paymentDoc = querySnapshot.docs[0];
               await updateDoc(doc(db, 'payments', paymentDoc.id), {
@@ -479,8 +476,8 @@ const GigDetails = () => {
               </div>
             </CardHeader>
             <CardContent>
-              <img 
-                src={gig.image} 
+              <img
+                src={gig.image}
                 alt={gig.title}
                 className="w-full h-64 object-cover rounded-lg mb-6"
               />
@@ -489,12 +486,12 @@ const GigDetails = () => {
                   <h3 className="text-lg font-semibold mb-2">Description</h3>
                   <p className="text-gray-600">{gig.description}</p>
                 </div>
-                
+
                 <div>
                   <h3 className="text-lg font-semibold mb-2">Skills</h3>
                   <div className="flex flex-wrap gap-2">
                     {gig.skills.map((skill, index) => (
-                      <span 
+                      <span
                         key={index}
                         className="px-3 py-1 bg-gray-100 rounded-full text-sm"
                       >
@@ -510,7 +507,7 @@ const GigDetails = () => {
                     <ul className="list-disc list-inside space-y-1">
                       {gig.projectLinks.map((link, index) => (
                         <li key={index}>
-                          <a 
+                          <a
                             href={link}
                             target="_blank"
                             rel="noopener noreferrer"
@@ -532,32 +529,32 @@ const GigDetails = () => {
         <div className="space-y-6">
           {/* Price Card */}
           <Card>
-        <CardContent className="pt-6">
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center">
-              <DollarSign className="h-6 w-6 text-gray-500" />
-              <span className="text-2xl font-bold">{gig.startingPrice}</span>
-            </div>
-            <Button 
-              onClick={handleBuyNow}
-              className="w-32"
-              disabled={!paypalLoaded}
-            >
-              Buy Now
-            </Button>
-          </div>
-          <div id="paypal-button-container"></div>
-          <div className="text-sm text-gray-500">
-            ✓ {gig.deliveryTime} delivery
-            <br />
-            ✓ Direct communication
-            <br />
-            ✓ Money-back guarantee
-          </div>
-        </CardContent>
-      </Card>
-           {/* Enhanced Chat Card */}
-           <Card>
+            <CardContent className="pt-6">
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center">
+                  <DollarSign className="h-6 w-6 text-gray-500" />
+                  <span className="text-2xl font-bold">{gig.startingPrice}</span>
+                </div>
+                <Button
+                  onClick={handleBuyNow}
+                  className="w-32"
+                  disabled={!paypalLoaded}
+                >
+                  Buy Now
+                </Button>
+              </div>
+              <div id="paypal-button-container"></div>
+              <div className="text-sm text-gray-500">
+                ✓ {gig.deliveryTime} delivery
+                <br />
+                ✓ Direct communication
+                <br />
+                ✓ Money-back guarantee
+              </div>
+            </CardContent>
+          </Card>
+          {/* Enhanced Chat Card */}
+          <Card>
             <CardHeader>
               <div className="flex items-center justify-between">
                 <CardTitle className="text-lg">Message Seller</CardTitle>
@@ -578,11 +575,10 @@ const GigDetails = () => {
                     {messages.map((msg) => (
                       <div
                         key={msg.id}
-                        className={`p-3 rounded-lg ${
-                          msg.senderId === currentUser?.uid
+                        className={`p-3 rounded-lg ${msg.senderId === currentUser?.uid
                             ? 'bg-blue-100 ml-auto'
                             : 'bg-gray-100'
-                        } max-w-[80%]`}
+                          } max-w-[80%]`}
                       >
                         <div className="text-sm font-semibold mb-1">
                           {msg.senderName}
@@ -605,7 +601,7 @@ const GigDetails = () => {
                         className="flex-1"
                         disabled={sendingMessage}
                       />
-                      <Button 
+                      <Button
                         type="submit"
                         disabled={sendingMessage}
                       >
