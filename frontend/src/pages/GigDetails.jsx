@@ -36,6 +36,7 @@ const GigDetails = () => {
   const { id } = useParams();
   const navigate = useNavigate();
   const { currentUser } = useAuth();
+  const { toast } = useToast();
   const [gig, setGig] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -44,20 +45,18 @@ const GigDetails = () => {
   const [chatOpen, setChatOpen] = useState(false);
   const [paypalLoaded, setPaypalLoaded] = useState(false);
   const [sendingMessage, setSendingMessage] = useState(false);
+  const [processingPayment, setProcessingPayment] = useState(false);
 
-  const API_BASE_URL = process.env.NODE_ENV === 'production'
-    ? 'https://www.flexhunt.co'  // Your production domain
-    : 'http://localhost:5000';   // Local development server
- const getApiBaseUrl = () => {
+  const getApiBaseUrl = () => {
     const hostname = window.location.hostname;
     if (hostname === 'localhost') {
       return 'http://localhost:5000';
     } else if (hostname === 'flexhunt.co') {
       return 'https://flexhunt.co';
     }
-    // Fallback for other domains
     return 'https://flexhunt.co';
   };
+
   useEffect(() => {
     const fetchGig = async () => {
       try {
@@ -66,7 +65,6 @@ const GigDetails = () => {
 
         if (gigDoc.exists()) {
           const gigData = { id: gigDoc.id, ...gigDoc.data() };
-          console.log('Fetched gig data:', gigData); // Debug log
           setGig(gigData);
         } else {
           setError('Gig not found');
@@ -82,43 +80,12 @@ const GigDetails = () => {
     fetchGig();
   }, [id]);
 
-  const checkMessageRateLimit = async (userId) => {
-    const db = getFirestore();
-    const userRef = doc(db, 'users', userId);
-    const userDoc = await getDoc(userRef);
-
-    if (!userDoc.exists()) return true;
-
-    const lastMessage = userDoc.data().lastMessage;
-    if (!lastMessage) return true;
-
-    // Rate limit: 1 message per 2 seconds
-    const timeSinceLastMessage = Date.now() - new Date(lastMessage).getTime();
-    return timeSinceLastMessage > 2000;
-  };
   const messageSchema = z.object({
     message: z.string()
       .min(1, 'Message cannot be empty')
       .max(1000, 'Message is too long')
       .trim()
   });
-
-  const updateMessageTimestamp = async (userId) => {
-    const db = getFirestore();
-    const userRef = doc(db, 'users', userId);
-
-    try {
-      await setDoc(userRef, {
-        lastMessage: new Date().toISOString(),
-        messageCount: increment(1)
-      }, { merge: true });
-
-      return true;
-    } catch (error) {
-      console.error('Error updating message timestamp:', error);
-      return false;
-    }
-  };
 
   useEffect(() => {
     if (!currentUser || !gig) return;
@@ -148,21 +115,9 @@ const GigDetails = () => {
     try {
       setSendingMessage(true);
 
-      // Validate message
       const validatedData = messageSchema.parse({
         message: newMessage
       });
-
-      // Rate limiting check
-      const canSendMessage = await checkMessageRateLimit(currentUser.uid);
-      if (!canSendMessage) {
-        toast({
-          variant: "destructive",
-          title: "Too Many Messages",
-          description: "Please wait a moment before sending another message.",
-        });
-        return;
-      }
 
       const db = getFirestore();
       await addDoc(collection(db, 'messages'), {
@@ -176,10 +131,6 @@ const GigDetails = () => {
       });
 
       setNewMessage('');
-
-      // Update last message timestamp for rate limiting
-      await updateMessageTimestamp(currentUser.uid);
-
       toast({
         title: "Message Sent",
         description: "Your message has been sent successfully.",
@@ -204,167 +155,58 @@ const GigDetails = () => {
     }
   };
 
-  useEffect(() => {
-    const loadPaypalScript = () => {
-      if (window.paypal) {
-        setPaypalLoaded(true);
-        return;
-      }
-
-      const script = document.createElement('script');
-      // Add currency and intent parameters
-      script.src = `https://www.paypal.com/sdk/js?client-id=Ael-tHA9_mkr9yKohQV7M3O_LUq7ZfHAAA002cENIRptQc15oNItGBYhkXV0JHFoiTIeRz6F6apyUec2&currency=USD&intent=capture`;
-      script.async = true;
-
-      script.onload = () => {
-        setPaypalLoaded(true);
-      };
-
-      script.onerror = (err) => {
-        console.error('Failed to load PayPal SDK:', err);
-        setError('Failed to initialize payment system');
-      };
-
-      document.body.appendChild(script);
-    };
-
-    loadPaypalScript();
-
-    return () => {
-      const paypalScript = document.querySelector('script[src*="paypal"]');
-      if (paypalScript) {
-        paypalScript.remove();
-      }
-    };
-  }, []);
-
-
-
-  const createPaymentOrder = async () => {
-    if (!currentUser || !gig) {
-      throw new Error('User or gig data is missing');
-    }
-
-    console.log('Creating payment for gig:', {
-      price: gig.startingPrice,
-      providerId: gig.providerId,
-      title: gig.title
-    });
-
-    const missingFields = [];
-    if (!gig.providerId) missingFields.push('providerId');
-    if (!gig.title) missingFields.push('title');
-    if (!gig.startingPrice) missingFields.push('startingPrice');
-
-    if (missingFields.length > 0) {
-      const errorMsg = `Missing required fields: ${missingFields.join(', ')}`;
-      console.error(errorMsg, gig);
-      throw new Error(errorMsg);
-    }
-
-    const db = getFirestore();
-
-    try {
-      const paymentData = {
-        gigId: id,
-        gigTitle: gig.title,
-        buyerId: currentUser.uid,
-        buyerEmail: currentUser.email,
-        buyerName: currentUser.displayName || 'Anonymous',
-        sellerId: gig.providerId,
-        sellerEmail: gig.providerEmail || '',
-        sellerName: gig.provider || 'Unknown Provider',
-        amount: Number(gig.startingPrice),
-        status: 'PENDING',
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        currency: 'USD',
-        paymentMethod: 'PAYPAL',
-        deliveryTime: gig.deliveryTime || '7 days',
-        category: gig.category || 'uncategorized'
-      };
-
-      console.log('Creating payment with data:', paymentData);
-
-      const paymentDoc = await addDoc(collection(db, 'payments'), paymentData);
-      console.log('Payment document created with ID:', paymentDoc.id);
-
-      return paymentDoc.id;
-    } catch (err) {
-      console.error('Error creating payment document:', err);
-      throw new Error(`Failed to create payment record: ${err.message}`);
-    }
-  };
-
- const handleBuyNow = async () => {
+  const handleBuyNow = async () => {
     if (!currentUser) {
       setError('Please log in to purchase this gig');
       return;
     }
 
-    if (!paypalLoaded) {
-      setError('Payment system is still initializing. Please try again.');
-      return;
-    }
-
     try {
-      const container = document.getElementById('paypal-button-container');
-      if (container) {
-        container.innerHTML = '';
+      setProcessingPayment(true);
+      const token = await currentUser.getIdToken();
+      const API_BASE_URL = getApiBaseUrl();
+
+      // Create payment in Firebase
+      const db = getFirestore();
+      const paymentDoc = await addDoc(collection(db, 'payments'), {
+        gigId: id,
+        buyerId: currentUser.uid,
+        sellerId: gig.providerId,
+        amount: gig.startingPrice,
+        status: 'PENDING',
+        createdAt: serverTimestamp(),
+        title: gig.title
+      });
+
+      // Create PayPal order
+      const response = await fetch(`${API_BASE_URL}/api/create-payment`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          gigId: id,
+          paymentId: paymentDoc.id,
+          amount: gig.startingPrice,
+          title: gig.title,
+          buyerId: currentUser.uid,
+          sellerId: gig.providerId
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to create payment');
       }
 
+      const { orderID } = await response.json();
+
+      // Render PayPal buttons
       const paypalButtons = window.paypal.Buttons({
-        fundingSource: window.paypal.FUNDING.PAYPAL,
-        style: {
-          layout: 'vertical',
-          color: 'blue',
-          shape: 'rect',
-          label: 'pay'
-        },
-        createOrder: async () => {
-          try {
-            const paymentId = await createPaymentOrder();
-            const API_BASE_URL = getApiBaseUrl();
-            const token = await currentUser.getIdToken();
-
-            const response = await fetch(`${API_BASE_URL}/api/create-payment`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`
-              },
-              body: JSON.stringify({
-                gigId: id,
-                paymentId,
-                buyerId: currentUser.uid,
-                amount: gig.startingPrice,
-                title: gig.title,
-                currency: 'USD'
-              })
-            });
-
-            if (!response.ok) {
-              throw new Error(`Server error: ${response.status}`);
-            }
-
-            const data = await response.json();
-            if (!data.orderID) {
-              throw new Error('No orderID received from server');
-            }
-
-            return data.orderID;
-          } catch (err) {
-            console.error('Error creating order:', err);
-            setError(err.message || 'Failed to create payment order');
-            throw err;
-          }
-        },
+        orderID: orderID,
         onApprove: async (data) => {
           try {
-            const API_BASE_URL = getApiBaseUrl();
-            const token = await currentUser.getIdToken();
-
-            const response = await fetch(`${API_BASE_URL}/api/capture-payment`, {
+            const captureResponse = await fetch(`${API_BASE_URL}/api/capture-payment`, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
@@ -375,35 +217,51 @@ const GigDetails = () => {
               })
             });
 
-            if (!response.ok) {
-              throw new Error(`Failed to capture payment: ${response.status}`);
+            if (!captureResponse.ok) {
+              throw new Error('Failed to capture payment');
             }
 
-            const captureResult = await response.json();
+            const captureResult = await captureResponse.json();
             if (captureResult.status === 'COMPLETED') {
+              toast({
+                title: "Payment Successful",
+                description: "Your payment has been processed successfully.",
+              });
               navigate('/orders');
             }
           } catch (err) {
             console.error('Payment capture error:', err);
-            setError(err.message || 'Failed to complete payment');
+            toast({
+              variant: "destructive",
+              title: "Payment Failed",
+              description: err.message || 'Failed to complete payment',
+            });
           }
         },
         onError: (err) => {
           console.error('PayPal error:', err);
-          setError(`Payment failed: ${err.message || 'Unknown error'}`);
+          toast({
+            variant: "destructive",
+            title: "Payment Error",
+            description: err.message || 'An error occurred during payment',
+          });
         }
       });
 
-      // Check if the buttons can be rendered before attempting to render
-      const canRender = await paypalButtons.isEligible();
-      if (canRender) {
+      const container = document.getElementById('paypal-button-container');
+      if (container) {
+        container.innerHTML = '';
         await paypalButtons.render('#paypal-button-container');
-      } else {
-        setError('PayPal payment is not available at this time');
       }
     } catch (err) {
       console.error('Payment processing error:', err);
-      setError(err.message || 'Error processing payment');
+      toast({
+        variant: "destructive",
+        title: "Payment Error",
+        description: err.message || 'Failed to process payment',
+      });
+    } finally {
+      setProcessingPayment(false);
     }
   };
 
@@ -450,7 +308,7 @@ const GigDetails = () => {
                 <div>
                   <h3 className="text-lg font-semibold mb-2">Skills</h3>
                   <div className="flex flex-wrap gap-2">
-                    {gig.skills.map((skill, index) => (
+                    {gig.skills?.map((skill, index) => (
                       <span
                         key={index}
                         className="px-3 py-1 bg-gray-100 rounded-full text-sm"
@@ -460,26 +318,6 @@ const GigDetails = () => {
                     ))}
                   </div>
                 </div>
-
-                {gig.projectLinks?.length > 0 && (
-                  <div>
-                    <h3 className="text-lg font-semibold mb-2">Project Links</h3>
-                    <ul className="list-disc list-inside space-y-1">
-                      {gig.projectLinks.map((link, index) => (
-                        <li key={index}>
-                          <a
-                            href={link}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-blue-600 hover:underline"
-                          >
-                            {link}
-                          </a>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
               </div>
             </CardContent>
           </Card>
@@ -498,13 +336,13 @@ const GigDetails = () => {
                 <Button
                   onClick={handleBuyNow}
                   className="w-32"
-                  disabled={!paypalLoaded}
+                  disabled={processingPayment}
                 >
-                  Buy Now
+                  {processingPayment ? 'Processing...' : 'Buy Now'}
                 </Button>
               </div>
               <div id="paypal-button-container"></div>
-              <div className="text-sm text-gray-500">
+              <div className="text-sm text-gray-500 mt-4">
                 ✓ {gig.deliveryTime} delivery
                 <br />
                 ✓ Direct communication
@@ -513,7 +351,8 @@ const GigDetails = () => {
               </div>
             </CardContent>
           </Card>
-          {/* Enhanced Chat Card */}
+
+          {/* Chat Card */}
           <Card>
             <CardHeader>
               <div className="flex items-center justify-between">
@@ -535,10 +374,11 @@ const GigDetails = () => {
                     {messages.map((msg) => (
                       <div
                         key={msg.id}
-                        className={`p-3 rounded-lg ${msg.senderId === currentUser?.uid
-                          ? 'bg-blue-100 ml-auto'
-                          : 'bg-gray-100'
-                          } max-w-[80%]`}
+                        className={`p-3 rounded-lg ${
+                          msg.senderId === currentUser?.uid
+                            ? 'bg-blue-100 ml-auto'
+                            : 'bg-gray-100'
+                        } max-w-[80%]`}
                       >
                         <div className="text-sm font-semibold mb-1">
                           {msg.senderName}
