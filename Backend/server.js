@@ -102,19 +102,22 @@ app.post('/api/create-payment', validateFirebaseToken, async (req, res) => {
   try {
     const { gigId, amount, title, buyerId, sellerId } = req.body;
 
-    // Input validation
-    if (!gigId || !amount || !buyerId || !sellerId) {
-      return res.status(400).json({
-        status: 'error',
-        error: 'Missing required fields',
-        required: ['gigId', 'amount', 'buyerId', 'sellerId']
-      });
+    // Enhanced input validation with specific error messages
+    if (!gigId) throw new Error('Missing gigId');
+    if (!amount) throw new Error('Missing amount');
+    if (!buyerId) throw new Error('Missing buyerId');
+    if (!sellerId) throw new Error('Missing sellerId');
+
+    // Validate amount format
+    const parsedAmount = parseFloat(amount);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      throw new Error('Invalid amount value');
     }
 
-    // Create payment record
+    // Create payment record with better error handling
     const paymentRef = await db.collection('payments').add({
       gigId,
-      amount: parseFloat(amount),
+      amount: parsedAmount,
       buyerId,
       sellerId,
       status: 'PENDING',
@@ -124,9 +127,12 @@ app.post('/api/create-payment', validateFirebaseToken, async (req, res) => {
       escrowReleaseDate: calculateEscrowReleaseDate(),
       isDisputed: false,
       platform: 'PAYPAL'
+    }).catch(error => {
+      console.error('Firebase payment creation error:', error);
+      throw new Error('Failed to create payment record');
     });
 
-    // Create PayPal order
+    // Create PayPal order with enhanced error handling
     const request = new paypal.orders.OrdersCreateRequest();
     request.prefer("return=representation");
     request.requestBody({
@@ -134,7 +140,7 @@ app.post('/api/create-payment', validateFirebaseToken, async (req, res) => {
       purchase_units: [{
         amount: {
           currency_code: 'USD',
-          value: amount.toString()
+          value: parsedAmount.toFixed(2) // Ensure proper decimal format
         },
         description: title,
         custom_id: `${gigId}_${paymentRef.id}`
@@ -150,18 +156,22 @@ app.post('/api/create-payment', validateFirebaseToken, async (req, res) => {
 
     const order = await paypalClient.execute(request);
     
-    if (!order || !order.result) {
-      throw new Error('Failed to create PayPal order');
+    if (!order?.result?.id) {
+      throw new Error('Invalid PayPal order response');
     }
 
     // Update payment record with PayPal order ID
     await paymentRef.update({ 
       paypalOrderId: order.result.id 
+    }).catch(error => {
+      console.error('Payment update error:', error);
+      throw new Error('Failed to update payment with PayPal order ID');
     });
 
-    // Send response
+    // Send explicit JSON response
     return res.status(200).json({
       status: 'success',
+      success: true, // Added for frontend compatibility
       orderID: order.result.id,
       paymentId: paymentRef.id
     });
@@ -169,15 +179,16 @@ app.post('/api/create-payment', validateFirebaseToken, async (req, res) => {
   } catch (error) {
     console.error('Payment creation error:', error);
     
+    // Send detailed error response
     return res.status(500).json({
       status: 'error',
+      success: false,
       error: 'Failed to create payment',
       message: error.message,
       details: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 });
-
 app.post('/api/capture-payment', validateFirebaseToken, async (req, res) => {
   try {
     const { orderID } = req.body;
