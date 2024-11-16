@@ -21,22 +21,19 @@ const normalizeOrigin = (origin) => {
   if (!origin) return null;
   try {
     const url = new URL(origin);
-    // Remove 'www.' if present and return the origin
     return url.protocol + '//' + url.host.replace(/^www\./, '');
   } catch (e) {
     return origin;
   }
 };
 
-// Enhanced CORS configuration with domain normalization
+// CORS configuration with domain normalization
 const corsOptions = {
   origin: function(origin, callback) {
     if (!origin) {
-      // Allow requests with no origin (like mobile apps or curl requests)
       return callback(null, true);
     }
 
-    // Normalize the request origin and allowed origins for comparison
     const normalizedRequestOrigin = normalizeOrigin(origin);
     const normalizedAllowedOrigins = allowedOrigins.map(normalizeOrigin);
 
@@ -55,13 +52,24 @@ const corsOptions = {
   credentials: true,
   preflightContinue: false,
   optionsSuccessStatus: 204,
-  maxAge: 86400 // CORS preflight cache time in seconds (24 hours)
+  maxAge: 86400
 };
 
-
+// Apply CORS first
 app.use(cors(corsOptions));
 app.use(express.json());
-app.options('*', cors(corsOptions));
+
+app.use((req, res, next) => {
+  if (req.method === 'OPTIONS') {
+    return next();
+  }
+  
+  if (process.env.NODE_ENV === 'production' && req.headers.host?.startsWith('www.')) {
+    const newUrl = `https://${req.headers.host.replace(/^www\./, '')}${req.url}`;
+    return res.redirect(301, newUrl);
+  }
+  next();
+});
 const initializePayPalClient = () => {
   try {
     const environment = process.env.NODE_ENV === 'production'
@@ -375,7 +383,7 @@ app.use((err, req, res, next) => {
       error: 'CORS Error',
       message: 'Cross-Origin Request Blocked',
       requestOrigin: req.headers.origin,
-      allowedOrigins
+      allowedOrigins: allowedOrigins.map(normalizeOrigin)
     });
   }
   
