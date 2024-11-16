@@ -29,13 +29,21 @@ app.post('/api/create-payment', async (req, res) => {
   try {
     const { gigId, buyerId, amount } = req.body;
 
+    // Validate required fields
+    if (!gigId || !buyerId || !amount) {
+      return res.status(400).json({ 
+        error: 'Missing required fields',
+        details: { gigId, buyerId, amount }
+      });
+    }
+
     // Get gig details from Firestore
     const gigDoc = await db.collection('gigs').doc(gigId).get();
-    const gig = gigDoc.data();
-
-    if (!gig) {
+    if (!gigDoc.exists) {
       return res.status(404).json({ error: 'Gig not found' });
     }
+
+    const gig = gigDoc.data();
 
     // Create PayPal order
     const request = new paypal.orders.OrdersCreateRequest();
@@ -45,7 +53,7 @@ app.post('/api/create-payment', async (req, res) => {
       purchase_units: [{
         amount: {
           currency_code: 'USD',
-          value: amount
+          value: amount.toString() // Ensure amount is string
         },
         description: `Payment for: ${gig.title}`,
         custom_id: `${gigId}_${buyerId}_${Date.now()}`
@@ -53,28 +61,31 @@ app.post('/api/create-payment', async (req, res) => {
     });
 
     const order = await paypalClient.execute(request);
-
+    
     // Create payment record in Firestore
-    await db.collection('payments').add({
+    const paymentRef = await db.collection('payments').add({
       gigId,
       buyerId,
       sellerId: gig.providerId,
-      amount,
+      amount: parseFloat(amount),
       status: 'PENDING',
       paypalOrderId: order.result.id,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      escrowReleaseDate: null,
-      isDisputed: false
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
     });
 
-    res.json({
+    return res.status(200).json({
       orderID: order.result.id,
-      status: order.result.status
+      status: order.result.status,
+      paymentId: paymentRef.id
     });
 
   } catch (error) {
     console.error('Error creating payment:', error);
-    res.status(500).json({ error: 'Error creating payment' });
+    return res.status(500).json({ 
+      error: 'Error creating payment',
+      message: error.message,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 });
 
