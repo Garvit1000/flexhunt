@@ -48,6 +48,13 @@ const GigDetails = () => {
   const API_BASE_URL = process.env.NODE_ENV === 'production'
     ? 'https://www.flexhunt.co'  // Your production domain
     : 'http://localhost:5000';   // Local development server
+  const getApiBaseUrl = () => {
+    if (window.location.hostname === 'localhost') {
+      return 'http://localhost:5000';
+    }
+    // Replace with your Render.com URL
+    return 'https://www.flexhunt.co';
+  };
   useEffect(() => {
     const fetchGig = async () => {
       try {
@@ -299,32 +306,33 @@ const GigDetails = () => {
       return;
     }
 
-    if (!gig) {
-      setError('Gig details not loaded');
-      return;
-    }
-
     try {
       const container = document.getElementById('paypal-button-container');
       if (container) {
         container.innerHTML = '';
       }
-  
+
       window.paypal.Buttons({
         createOrder: async () => {
           try {
             const paymentId = await createPaymentOrder();
-            
-            const API_BASE_URL = process.env.NODE_ENV === 'production'
-              ? 'https://www.flexhunt.co'
-              : 'http://localhost:5000';
-  
+            const API_BASE_URL = getApiBaseUrl();
+
+            console.log('Creating PayPal order with:', {
+              gigId: id,
+              paymentId,
+              buyerId: currentUser.uid,
+              amount: gig.startingPrice,
+              title: gig.title
+            });
+
+            const token = await currentUser.getIdToken();
             const response = await fetch(`${API_BASE_URL}/api/create-payment`, {
               method: 'POST',
-              credentials: 'include', // Important for CORS with credentials
+              credentials: 'include',
               headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${await currentUser.getIdToken()}`
+                'Authorization': `Bearer ${token}`
               },
               body: JSON.stringify({
                 gigId: id,
@@ -334,14 +342,16 @@ const GigDetails = () => {
                 title: gig.title
               })
             });
-  
+
             if (!response.ok) {
-              const errorText = await response.text();
-              throw new Error(`Server error: ${response.status} - ${errorText}`);
+              const errorData = await response.text();
+              console.error('Server error response:', errorData);
+              throw new Error(`Server error: ${response.status} - ${errorData}`);
             }
-  
-            const responseData = await response.json();
-            return responseData.orderID;
+
+            const data = await response.json();
+            console.log('Order created successfully:', data);
+            return data.orderID;
           } catch (err) {
             console.error('Error creating order:', err);
             setError(err.message || 'Failed to create payment order');
@@ -350,12 +360,17 @@ const GigDetails = () => {
         },
         onApprove: async (data, actions) => {
           try {
+            const API_BASE_URL = getApiBaseUrl();
+            const token = await currentUser.getIdToken();
+
+            console.log('Capturing payment for order:', data.orderID);
+
             const captureResponse = await fetch(`${API_BASE_URL}/api/capture-payment`, {
               method: 'POST',
               credentials: 'include',
               headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${await currentUser.getIdToken()}`
+                'Authorization': `Bearer ${token}`
               },
               body: JSON.stringify({
                 orderID: data.orderID
@@ -363,54 +378,16 @@ const GigDetails = () => {
             });
 
             if (!captureResponse.ok) {
-              const errorData = await captureResponse.json();
-              throw new Error(errorData.message || 'Failed to capture payment');
+              const errorData = await captureResponse.text();
+              console.error('Capture error response:', errorData);
+              throw new Error(`Failed to capture payment: ${errorData}`);
             }
 
             const captureResult = await captureResponse.json();
-            console.log('Payment capture result:', captureResult);
+            console.log('Payment captured successfully:', captureResult);
 
-            const db = getFirestore();
-            const paymentsRef = collection(db, 'payments');
-            const q = query(paymentsRef, where('paypalOrderId', '==', data.orderID));
-            const querySnapshot = await getDocs(q);
-
-            if (!querySnapshot.empty) {
-              const paymentDoc = querySnapshot.docs[0];
-
-              const updateData = {
-                status: captureResult.status || 'COMPLETED',
-                updatedAt: serverTimestamp(),
-                completedAt: serverTimestamp()
-              };
-
-              if (captureResult.captureId) {
-                updateData.captureId = captureResult.captureId;
-              }
-
-              await updateDoc(doc(db, 'payments', paymentDoc.id), updateData);
-
-              if (captureResult.status === 'COMPLETED') {
-                await addDoc(collection(db, 'orders'), {
-                  gigId: id,
-                  gigTitle: gig.title,
-                  buyerId: currentUser.uid,
-                  buyerEmail: currentUser.email,
-                  buyerName: currentUser.displayName || 'Anonymous',
-                  sellerId: gig.providerId,
-                  sellerEmail: gig.providerEmail || '',
-                  sellerName: gig.provider || 'Unknown Provider',
-                  paymentId: paymentDoc.id,
-                  status: 'PENDING',
-                  createdAt: serverTimestamp(),
-                  updatedAt: serverTimestamp(),
-                  amount: Number(gig.startingPrice),
-                  deliveryTime: gig.deliveryTime || '7 days',
-                  category: gig.category || 'uncategorized'
-                });
-              }
-
-              navigate(`/orders`);
+            if (captureResult.status === 'COMPLETED') {
+              navigate('/orders');
             }
           } catch (err) {
             console.error('Payment capture error:', err);
@@ -419,27 +396,7 @@ const GigDetails = () => {
         },
         onError: (err) => {
           console.error('PayPal error:', err);
-          setError('Payment failed. Please try again.');
-        },
-        onCancel: async (data) => {
-          if (!data?.orderID) return;
-
-          try {
-            const db = getFirestore();
-            const paymentsRef = collection(db, 'payments');
-            const q = query(paymentsRef, where('paypalOrderId', '==', data.orderID));
-            const querySnapshot = await getDocs(q);
-
-            if (!querySnapshot.empty) {
-              const paymentDoc = querySnapshot.docs[0];
-              await updateDoc(doc(db, 'payments', paymentDoc.id), {
-                status: 'CANCELLED',
-                updatedAt: serverTimestamp()
-              });
-            }
-          } catch (err) {
-            console.error('Error updating cancelled payment:', err);
-          }
+          setError(`Payment failed: ${err.message || 'Unknown error'}`);
         }
       }).render('#paypal-button-container');
     } catch (err) {
@@ -447,6 +404,7 @@ const GigDetails = () => {
       setError(err.message || 'Error processing payment');
     }
   };
+
   if (loading) return <div className="text-center mt-8">Loading...</div>;
   if (error) return (
     <Alert variant="destructive" className="max-w-2xl mx-auto mt-8">
@@ -576,8 +534,8 @@ const GigDetails = () => {
                       <div
                         key={msg.id}
                         className={`p-3 rounded-lg ${msg.senderId === currentUser?.uid
-                            ? 'bg-blue-100 ml-auto'
-                            : 'bg-gray-100'
+                          ? 'bg-blue-100 ml-auto'
+                          : 'bg-gray-100'
                           } max-w-[80%]`}
                       >
                         <div className="text-sm font-semibold mb-1">
