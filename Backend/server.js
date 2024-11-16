@@ -27,6 +27,18 @@ const corsOptions = {
   optionsSuccessStatus: 204
 };
 
+// Middleware
+app.use(cors(corsOptions));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+
+// Add request logging middleware
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+  next();
+});
+
 const calculateEscrowReleaseDate = () => {
   const date = new Date();
   date.setDate(date.getDate() + ESCROW_HOLD_DAYS);
@@ -40,6 +52,11 @@ const initializePayPalClient = () => {
   try {
     const clientId = process.env.PAYPAL_CLIENT_ID;
     const clientSecret = process.env.PAYPAL_CLIENT_SECRET;
+    
+    if (!clientId || !clientSecret) {
+      throw new Error('PayPal credentials are not configured');
+    }
+    
     const environment = process.env.NODE_ENV === 'production'
       ? new paypal.core.LiveEnvironment(clientId, clientSecret)
       : new paypal.core.SandboxEnvironment(clientId, clientSecret);
@@ -51,17 +68,13 @@ const initializePayPalClient = () => {
   }
 };
 
-// Middleware
-app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
-app.use(express.json());
-
-// Auth Middleware
+// Auth Middleware with improved error handling
 const validateFirebaseToken = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith('Bearer ')) {
       return res.status(401).json({
+        status: 'error',
         error: 'Unauthorized',
         message: 'Missing or invalid authorization token'
       });
@@ -74,6 +87,7 @@ const validateFirebaseToken = async (req, res, next) => {
   } catch (error) {
     console.error('Auth error:', error);
     res.status(401).json({
+      status: 'error',
       error: 'Authentication failed',
       message: error.message
     });
@@ -91,7 +105,7 @@ app.post('/api/create-payment', validateFirebaseToken, async (req, res) => {
     // Input validation
     if (!gigId || !amount || !buyerId || !sellerId) {
       return res.status(400).json({
-        success: false,
+        status: 'error',
         error: 'Missing required fields',
         required: ['gigId', 'amount', 'buyerId', 'sellerId']
       });
@@ -129,21 +143,25 @@ app.post('/api/create-payment', validateFirebaseToken, async (req, res) => {
         brand_name: 'FlexHunt',
         landing_page: 'NO_PREFERENCE',
         user_action: 'PAY_NOW',
-        return_url: 'https://www.flexhunt.co/payment/success',
-        cancel_url: 'https://www.flexhunt.co/payment/cancel'
+        return_url: `${process.env.FRONTEND_URL || 'https://www.flexhunt.co'}/payment/success`,
+        cancel_url: `${process.env.FRONTEND_URL || 'https://www.flexhunt.co'}/payment/cancel`
       }
     });
 
     const order = await paypalClient.execute(request);
     
+    if (!order || !order.result) {
+      throw new Error('Failed to create PayPal order');
+    }
+
     // Update payment record with PayPal order ID
     await paymentRef.update({ 
       paypalOrderId: order.result.id 
     });
 
     // Send response
-    res.status(200).json({
-      success: true,
+    return res.status(200).json({
+      status: 'success',
       orderID: order.result.id,
       paymentId: paymentRef.id
     });
@@ -151,9 +169,8 @@ app.post('/api/create-payment', validateFirebaseToken, async (req, res) => {
   } catch (error) {
     console.error('Payment creation error:', error);
     
-    // Send detailed error response
-    res.status(500).json({
-      success: false,
+    return res.status(500).json({
+      status: 'error',
       error: 'Failed to create payment',
       message: error.message,
       details: process.env.NODE_ENV === 'development' ? error.stack : undefined
@@ -367,29 +384,36 @@ if (process.env.NODE_ENV === 'production') {
   // Serve static files
   app.use(express.static(path.join(__dirname, '../frontend/dist')));
   
-  // Handle all other routes AFTER API routes
+  // Handle static asset requests
+  app.get('/assets/*', (req, res) => {
+    res.sendFile(path.join(__dirname, '../frontend/dist', req.path));
+  });
+  
+  // Handle all other routes
   app.get('*', (req, res) => {
-    // Don't redirect OPTIONS requests
-    if (req.method === 'OPTIONS') {
-      return res.status(204).end();
-    }
     res.sendFile(path.join(__dirname, '../frontend/dist/index.html'));
   });
 }
 
+// Error handling middleware
 app.use((err, req, res, next) => {
-  console.error('Error:', err);
+  console.error('Global error handler:', err);
   
-  if (req.method === 'OPTIONS') {
-    return res.status(204).end();
+  // Don't send error details in production
+  const errorResponse = {
+    status: 'error',
+    message: process.env.NODE_ENV === 'production' 
+      ? 'An unexpected error occurred' 
+      : err.message,
+    timestamp: new Date().toISOString()
+  };
+
+  if (process.env.NODE_ENV === 'development') {
+    errorResponse.stack = err.stack;
   }
   
-  res.status(err.status || 500).json({
-    error: err.message || 'Internal server error',
-    timestamp: new Date().toISOString()
-  });
+  res.status(err.status || 500).json(errorResponse);
 });
-
 
 // Start server
 app.listen(PORT, () => {
