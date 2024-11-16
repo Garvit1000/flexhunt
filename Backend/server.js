@@ -7,15 +7,35 @@ const path = require('path');
 const { admin, db } = require('./config/firebase-config');
 
 const app = express();
+const corsOptions = {
+  origin: process.env.NODE_ENV === 'production'
+    ? ['https://www.flexhunt.co', 'https://flexhunt.co']
+    : 'http://localhost:5173', // Specifically allow Vite's default port
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  exposedHeaders: ['Content-Range', 'X-Content-Range']
+};
 
-// Middleware
-app.use(cors());
+app.use(cors(corsOptions));
 app.use(express.json());
-
+app.options('*', cors(corsOptions));
+app.use((err, req, res, next) => {
+  if (err.message === 'CORS Error') {
+    return res.status(403).json({
+      error: 'CORS Error',
+      message: 'Cross-Origin Request Blocked',
+      allowedOrigins: corsOptions.origin
+    });
+  }
+  next(err);
+});
 // PayPal Configuration
 const environment = process.env.NODE_ENV === 'production'
   ? paypal.core.LiveEnvironment
   : paypal.core.SandboxEnvironment;
+
+console.log('PayPal Environment:', process.env.NODE_ENV);
 
 const paypalClient = new paypal.core.PayPalHttpClient(
   new environment(
@@ -24,17 +44,52 @@ const paypalClient = new paypal.core.PayPalHttpClient(
   )
 );
 
+// Enhanced error handling middleware
+app.use((err, req, res, next) => {
+  console.error('Global error handler:', {
+    error: err.message,
+    stack: err.stack,
+    path: req.path,
+    method: req.method,
+    body: req.body
+  });
+  
+  res.status(500).json({
+    error: 'Internal server error',
+    message: err.message,
+    path: req.path
+  });
+});
+
+
 // Routes
 app.post('/api/create-payment', async (req, res) => {
+  res.header('Access-Control-Allow-Origin', process.env.NODE_ENV === 'production'
+    ? 'https://www.flexhunt.co'
+    : 'http://localhost:5173');
+  res.header('Access-Control-Allow-Credentials', 'true');
   try {
-    const { gigId, buyerId, amount } = req.body;
+    // Validate auth token
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) {
+      return res.status(401).json({ 
+        error: 'Unauthorized',
+        message: 'Missing or invalid authorization token'
+      });
+    }
 
-    // Get gig details from Firestore
-    const gigDoc = await db.collection('gigs').doc(gigId).get();
-    const gig = gigDoc.data();
+    const token = authHeader.split('Bearer ')[1];
+    await admin.auth().verifyIdToken(token);
 
-    if (!gig) {
-      return res.status(404).json({ error: 'Gig not found' });
+    const { gigId, buyerId, amount, paymentId, title } = req.body;
+
+    // Validate required fields
+    if (!gigId || !buyerId || !amount) {
+      return res.status(400).json({
+        error: 'Missing required fields',
+        message: 'Please provide gigId, buyerId, and amount',
+        received: { gigId, buyerId, amount }
+      });
     }
 
     // Create PayPal order
@@ -45,27 +100,15 @@ app.post('/api/create-payment', async (req, res) => {
       purchase_units: [{
         amount: {
           currency_code: 'USD',
-          value: amount
+          value: amount.toString()
         },
-        description: `Payment for: ${gig.title}`,
+        description: title ? `Payment for: ${title}` : `Payment for gig ${gigId}`,
         custom_id: `${gigId}_${buyerId}_${Date.now()}`
       }]
     });
 
     const order = await paypalClient.execute(request);
-
-    // Create payment record in Firestore
-    await db.collection('payments').add({
-      gigId,
-      buyerId,
-      sellerId: gig.providerId,
-      amount,
-      status: 'PENDING',
-      paypalOrderId: order.result.id,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      escrowReleaseDate: null,
-      isDisputed: false
-    });
+    console.log('PayPal order created successfully:', order.result);
 
     res.json({
       orderID: order.result.id,
@@ -73,10 +116,15 @@ app.post('/api/create-payment', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error creating payment:', error);
-    res.status(500).json({ error: 'Error creating payment' });
+    console.error('Payment creation error:', error);
+    res.status(500).json({
+      error: 'Error creating payment',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
   }
 });
+
 
 app.post('/api/capture-payment', async (req, res) => {
   try {
@@ -218,4 +266,11 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT} in ${process.env.NODE_ENV} mode`);
+  console.log('CORS configured for:', 
+    Array.isArray(corsOptions.origin) 
+      ? corsOptions.origin.join(', ') 
+      : corsOptions.origin
+  );
+});
