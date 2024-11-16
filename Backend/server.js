@@ -7,26 +7,30 @@ const path = require('path');
 const { admin, db } = require('./config/firebase-config');
 
 const app = express();
+const allowedOrigins = [
+  'https://flexhunt.onrender.com',
+  'https://www.flexhunt.co',
+  'https://flexhunt.co',
+  'http://localhost:5173'
+];
+
+// Enhanced CORS configuration
 const corsOptions = {
-  origin: (origin, callback) => {
-    const allowedOrigins = [
-      'https://flexhunt.onrender.com',
-      'https://www.flexhunt.co',
-      'https://flexhunt.co',
-      'http://localhost:5173'
-    ];
-    
+  origin: function(origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
       callback(new Error('Not allowed by CORS'));
     }
   },
-  credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
-  exposedHeaders: ['Content-Range', 'X-Content-Range']
+  credentials: true,
+  preflightContinue: false,  // Important: Prevent preflight from being passed down
+  optionsSuccessStatus: 204  // Some legacy browsers (IE11, various SmartTVs) choke on 204
 };
+
 
 app.use(cors(corsOptions));
 app.use(express.json());
@@ -77,6 +81,9 @@ app.use((err, req, res, next) => {
     timestamp: new Date().toISOString()
   });
 });
+if (process.env.NODE_ENV === 'production') {
+  app.use(express.static(path.join(__dirname, '../frontend/dist')));
+}
 
 // Enhanced create payment endpoint
 app.post('/api/create-payment', async (req, res) => {
@@ -315,17 +322,27 @@ app.post('/api/dispute-payment', async (req, res) => {
   }
 });
 if (process.env.NODE_ENV === 'production') {
-  app.use(express.static(path.join(__dirname, '../frontend/dist')));
   app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, '../frontend/dist/index.html'));
   });
 }
+app.use((err, req, res, next) => {
+  if (err.message === 'Not allowed by CORS') {
+    return res.status(403).json({
+      error: 'CORS Error',
+      message: 'Cross-Origin Request Blocked',
+      allowedOrigins
+    });
+  }
+  
+  console.error('Error:', err);
+  res.status(500).json({
+    error: 'Internal Server Error',
+    message: process.env.NODE_ENV === 'development' ? err.message : 'Something went wrong'
+  });
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT} in ${process.env.NODE_ENV} mode`);
-  console.log('Server configuration:', {
-    environment: process.env.NODE_ENV,
-    port: PORT,
-    paypalEnvironment: process.env.NODE_ENV === 'production' ? 'live' : 'sandbox'
-  });
 });
