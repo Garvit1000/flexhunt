@@ -13,49 +13,18 @@ const PORT = process.env.PORT || 5000;
 const app = express();
 
 // CORS Configuration
-const allowedOrigins = [
-  'https://flexhunt.onrender.com',
-  'https://www.flexhunt.co',
-  'https://flexhunt.co',
-  'http://www.flexhunt.co',
-  'http://flexhunt.co',
-  'http://localhost:5173'
-];
-
-// Helper Functions
-const normalizeOrigin = (origin) => {
-  if (!origin) return null;
-  try {
-    const url = new URL(origin);
-    // Remove trailing slashes and normalize www
-    return url.protocol + '//' + url.host.replace(/^www\./, '').replace(/\/$/, '');
-  } catch (e) {
-    return origin;
-  }
-};
-
-// CORS Options
 const corsOptions = {
-  origin: (origin, callback) => {
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return callback(null, true);
-
-    const normalizedRequestOrigin = normalizeOrigin(origin);
-    const normalizedAllowedOrigins = allowedOrigins.map(normalizeOrigin);
-
-    if (normalizedAllowedOrigins.includes(normalizedRequestOrigin)) {
-      callback(null, true);
-    } else {
-      console.log('Blocked origin:', origin);
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
+  origin: [
+    'https://flexhunt.onrender.com',
+    'https://www.flexhunt.co',
+    'https://flexhunt.co',
+    'http://localhost:5173'
+  ],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'Accept', 'X-Requested-With'],
   credentials: true,
-  maxAge: 86400,
-  preflightContinue: false, // Prevent preflight requests from being redirected
-  optionsSuccessStatus: 204 // Return 204 for preflight requests
+  preflightContinue: false,
+  optionsSuccessStatus: 204
 };
 
 const calculateEscrowReleaseDate = () => {
@@ -381,42 +350,39 @@ app.post('/api/create-dispute', validateFirebaseToken, async (req, res) => {
   }
 });
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error('Error details:', {
-    message: err.message,
-    stack: err.stack,
-    path: req.path,
-    method: req.method,
-    body: req.body,
-    timestamp: new Date().toISOString()
+
+
+// Production settings
+if (process.env.NODE_ENV === 'production') {
+  // Serve static files
+  app.use(express.static(path.join(__dirname, '../frontend/dist')));
+  
+  // Handle all other routes AFTER API routes
+  app.get('*', (req, res) => {
+    // Don't redirect OPTIONS requests
+    if (req.method === 'OPTIONS') {
+      return res.status(204).end();
+    }
+    res.sendFile(path.join(__dirname, '../frontend/dist/index.html'));
   });
+}
 
-  if (err.message === 'Not allowed by CORS') {
-    return res.status(403).json({
-      error: 'CORS Error',
-      message: 'Cross-Origin Request Blocked',
-      requestOrigin: req.headers.origin,
-      allowedOrigins: allowedOrigins.map(normalizeOrigin)
-    });
+app.use((err, req, res, next) => {
+  console.error('Error:', err);
+  
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
   }
-
+  
   res.status(err.status || 500).json({
     error: err.message || 'Internal server error',
     timestamp: new Date().toISOString()
   });
 });
 
-// Production settings
-if (process.env.NODE_ENV === 'production') {
-  app.use(express.static(path.join(__dirname, '../frontend/dist')));
-  app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, '../frontend/dist/index.html'));
-  });
-}
 
 // Start server
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT} in ${process.env.NODE_ENV} mode`);
-  console.log('Allowed origins:', allowedOrigins);
+  console.log('Allowed origins:', corsOptions.origin);
 });
