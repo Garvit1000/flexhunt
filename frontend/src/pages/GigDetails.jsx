@@ -154,11 +154,13 @@ const getApiBaseUrl = () => {
     }
   };
 
- const handleBuyNow = async () => {
+const handleBuyNow = async () => {
   if (!currentUser) {
     setError('Please log in to purchase this gig');
     return;
   }
+
+  let paymentDocRef = null; // Declare outside try block so it's available in catch
 
   try {
     setProcessingPayment(true);
@@ -169,7 +171,7 @@ const getApiBaseUrl = () => {
     
     // Create payment in Firebase
     const db = getFirestore();
-    const paymentDoc = await addDoc(collection(db, 'payments'), {
+    paymentDocRef = await addDoc(collection(db, 'payments'), {
       gigId: id,
       buyerId: currentUser.uid,
       sellerId: gig.providerId,
@@ -179,7 +181,16 @@ const getApiBaseUrl = () => {
       title: gig.title
     });
 
-    // Make API request with proper error handling
+    // Log request details for debugging
+    console.log('Making payment request with data:', {
+      gigId: id,
+      paymentId: paymentDocRef.id,
+      amount: gig.startingPrice,
+      title: gig.title,
+      buyerId: currentUser.uid,
+      sellerId: gig.providerId
+    });
+
     const response = await fetch(`${API_BASE_URL}/api/create-payment`, {
       method: 'POST',
       headers: {
@@ -189,7 +200,7 @@ const getApiBaseUrl = () => {
       credentials: 'include',
       body: JSON.stringify({
         gigId: id,
-        paymentId: paymentDoc.id,
+        paymentId: paymentDocRef.id,
         amount: gig.startingPrice,
         title: gig.title,
         buyerId: currentUser.uid,
@@ -197,17 +208,27 @@ const getApiBaseUrl = () => {
       })
     });
 
-    // Check if response is ok before trying to parse JSON
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
+    // Log the raw response for debugging
+    const responseText = await response.text();
+    console.log('Raw server response:', responseText);
+
+    // Try to parse the response as JSON
+    let data;
+    try {
+      data = JSON.parse(responseText);
+    } catch (parseError) {
+      console.error('JSON parse error:', parseError);
+      console.error('Response that failed to parse:', responseText);
+      throw new Error(`Server returned invalid JSON: ${responseText}`);
     }
 
-    // Parse JSON response safely
-    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}, message: ${JSON.stringify(data)}`);
+    }
 
     // Validate response data
     if (!data || !data.success || !data.orderID) {
+      console.error('Invalid response data:', data);
       throw new Error('Invalid response data from server');
     }
 
@@ -225,16 +246,24 @@ const getApiBaseUrl = () => {
             credentials: 'include',
             body: JSON.stringify({
               orderID: paypalData.orderID,
-              paymentId: paymentDoc.id
+              paymentId: paymentDocRef.id
             })
           });
 
-          if (!captureResponse.ok) {
-            const errorText = await captureResponse.text();
-            throw new Error(`Failed to capture payment: ${errorText}`);
+          const captureText = await captureResponse.text();
+          let captureResult;
+          
+          try {
+            captureResult = JSON.parse(captureText);
+          } catch (parseError) {
+            console.error('Capture response parse error:', parseError);
+            console.error('Capture response text:', captureText);
+            throw new Error('Invalid capture response format');
           }
 
-          const captureResult = await captureResponse.json();
+          if (!captureResponse.ok) {
+            throw new Error(`Failed to capture payment: ${captureText}`);
+          }
           
           if (captureResult.status === 'COMPLETED') {
             toast({
@@ -285,16 +314,16 @@ const getApiBaseUrl = () => {
       description: err.message || 'Failed to process payment',
     });
 
-    // Clean up failed payment document
-    try {
-      if (paymentDoc) {
-        await updateDoc(paymentDoc.ref, {
+    // Clean up failed payment document if it was created
+    if (paymentDocRef) {
+      try {
+        await updateDoc(paymentDocRef, {
           status: 'FAILED',
           error: err.message
         });
+      } catch (cleanupErr) {
+        console.error('Failed to update payment status:', cleanupErr);
       }
-    } catch (cleanupErr) {
-      console.error('Failed to update payment status:', cleanupErr);
     }
   } finally {
     setProcessingPayment(false);
