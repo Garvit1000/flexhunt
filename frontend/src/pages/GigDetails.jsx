@@ -47,15 +47,13 @@ const GigDetails = () => {
   const [sendingMessage, setSendingMessage] = useState(false);
   const [processingPayment, setProcessingPayment] = useState(false);
 
-  const getApiBaseUrl = () => {
-    const hostname = window.location.hostname;
-    if (hostname === 'localhost') {
-      return 'http://localhost:5000';
-    } else if (hostname === 'flexhunt.co') {
-      return 'https://flexhunt.co';
-    }
-    return 'https://flexhunt.co';
-  };
+ const getApiBaseUrl = () => {
+  const hostname = window.location.hostname;
+  if (hostname === 'localhost') {
+    return 'http://localhost:5000';
+  }
+  return 'https://flexhunt.co'; // Always return the non-www version
+};
 
   useEffect(() => {
     const fetchGig = async () => {
