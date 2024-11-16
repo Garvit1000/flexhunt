@@ -27,21 +27,17 @@ const normalizeOrigin = (origin) => {
   if (!origin) return null;
   try {
     const url = new URL(origin);
-    return url.protocol + '//' + url.host.replace(/^www\./, '');
+    // Remove trailing slashes and normalize www
+    return url.protocol + '//' + url.host.replace(/^www\./, '').replace(/\/$/, '');
   } catch (e) {
     return origin;
   }
 };
 
-const calculateEscrowReleaseDate = () => {
-  const date = new Date();
-  date.setDate(date.getDate() + ESCROW_HOLD_DAYS);
-  return date;
-};
-
 // CORS Options
 const corsOptions = {
   origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
 
     const normalizedRequestOrigin = normalizeOrigin(origin);
@@ -57,8 +53,18 @@ const corsOptions = {
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'Accept', 'X-Requested-With'],
   credentials: true,
-  maxAge: 86400
+  maxAge: 86400,
+  preflightContinue: false, // Prevent preflight requests from being redirected
+  optionsSuccessStatus: 204 // Return 204 for preflight requests
 };
+
+const calculateEscrowReleaseDate = () => {
+  const date = new Date();
+  date.setDate(date.getDate() + ESCROW_HOLD_DAYS);
+  return date;
+};
+
+
 
 // PayPal Client Initialization
 const initializePayPalClient = () => {
@@ -78,6 +84,7 @@ const initializePayPalClient = () => {
 
 // Middleware
 app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 app.use(express.json());
 
 // Auth Middleware
