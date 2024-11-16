@@ -47,12 +47,13 @@ const GigDetails = () => {
   const [sendingMessage, setSendingMessage] = useState(false);
   const [processingPayment, setProcessingPayment] = useState(false);
 
- const getApiBaseUrl = () => {
+const getApiBaseUrl = () => {
   const hostname = window.location.hostname;
   if (hostname === 'localhost') {
     return 'http://localhost:5000';
   }
-  return 'https://flexhunt.co'; // Always return the non-www version
+  // Always use the same domain as the current request
+  return window.location.origin;
 };
 
   useEffect(() => {
@@ -154,44 +155,44 @@ const GigDetails = () => {
   };
 
   const handleBuyNow = async () => {
-    if (!currentUser) {
-      setError('Please log in to purchase this gig');
-      return;
-    }
+  if (!currentUser) {
+    setError('Please log in to purchase this gig');
+    return;
+  }
 
-    try {
-      setProcessingPayment(true);
-      const token = await currentUser.getIdToken();
-      const API_BASE_URL = getApiBaseUrl();
+  try {
+    setProcessingPayment(true);
+    const token = await currentUser.getIdToken();
+    const API_BASE_URL = getApiBaseUrl();
 
-      // Create payment in Firebase
-      const db = getFirestore();
-      const paymentDoc = await addDoc(collection(db, 'payments'), {
+    // Create payment in Firebase
+    const db = getFirestore();
+    const paymentDoc = await addDoc(collection(db, 'payments'), {
+      gigId: id,
+      buyerId: currentUser.uid,
+      sellerId: gig.providerId,
+      amount: gig.startingPrice,
+      status: 'PENDING',
+      createdAt: serverTimestamp(),
+      title: gig.title
+    });
+
+    const response = await fetch(`${API_BASE_URL}/api/create-payment`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
+      },
+      credentials: 'include', // Add this line
+      body: JSON.stringify({
         gigId: id,
-        buyerId: currentUser.uid,
-        sellerId: gig.providerId,
+        paymentId: paymentDoc.id,
         amount: gig.startingPrice,
-        status: 'PENDING',
-        createdAt: serverTimestamp(),
-        title: gig.title
-      });
-
-      // Create PayPal order
-      const response = await fetch(`${API_BASE_URL}/api/create-payment`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          gigId: id,
-          paymentId: paymentDoc.id,
-          amount: gig.startingPrice,
-          title: gig.title,
-          buyerId: currentUser.uid,
-          sellerId: gig.providerId
-        })
-      });
+        title: gig.title,
+        buyerId: currentUser.uid,
+        sellerId: gig.providerId
+      })
+    });
 
       if (!response.ok) {
         throw new Error('Failed to create payment');
