@@ -20,11 +20,12 @@ const corsOptions = {
     'https://flexhunt.co',
     'http://localhost:5173'
   ],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+ methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'Accept', 'X-Requested-With'],
   credentials: true,
   preflightContinue: false,
-  optionsSuccessStatus: 204
+  optionsSuccessStatus: 204,
+  exposedHeaders: ['Content-Length', 'Content-Type']
 };
 
 // Middleware
@@ -33,10 +34,79 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 
-// Add request logging middleware
 app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+  // Save the original send
+  const originalSend = res.send;
+  
+  res.send = function(body) {
+    // Ensure we're not sending an empty response
+    if (!body && body !== 0) {
+      console.warn('Attempted to send empty response');
+      return originalSend.call(this, { status: 'success', data: null });
+    }
+    return originalSend.call(this, body);
+  };
+  
   next();
+});
+
+// Production static file serving with proper error handling
+if (process.env.NODE_ENV === 'production') {
+  app.use('/assets', express.static(path.join(__dirname, '../frontend/dist/assets'), {
+    fallthrough: false // Return 404 for missing assets
+  }));
+  
+  app.use(express.static(path.join(__dirname, '../frontend/dist'), {
+    index: false // Don't serve index.html for all requests
+  }));
+  
+  // Handle asset requests with proper error handling
+  app.get('/assets/*', (req, res) => {
+    res.sendFile(path.join(__dirname, '../frontend/dist', req.path), (err) => {
+      if (err) {
+        res.status(404).json({
+          status: 'error',
+          message: 'Asset not found'
+        });
+      }
+    });
+  });
+  
+  // Final catch-all route for SPA
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, '../frontend/dist/index.html'), (err) => {
+      if (err) {
+        res.status(500).json({
+          status: 'error',
+          message: 'Error loading application'
+        });
+      }
+    });
+  });
+}
+
+// Enhanced error handling middleware
+app.use((err, req, res, next) => {
+  console.error('Global error handler:', err);
+  
+  // Ensure we always send a structured response
+  const errorResponse = {
+    status: 'error',
+    message: process.env.NODE_ENV === 'production' 
+      ? 'An unexpected error occurred' 
+      : err.message,
+    timestamp: new Date().toISOString(),
+    path: req.path
+  };
+
+  if (process.env.NODE_ENV === 'development') {
+    errorResponse.stack = err.stack;
+    errorResponse.details = err.details || null;
+  }
+  
+  // Ensure content-type is set
+  res.set('Content-Type', 'application/json');
+  res.status(err.status || 500).json(errorResponse);
 });
 
 const calculateEscrowReleaseDate = () => {
