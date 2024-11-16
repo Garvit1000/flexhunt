@@ -88,9 +88,10 @@ app.post('/api/create-payment', validateFirebaseToken, async (req, res) => {
   try {
     const { gigId, amount, title, buyerId, sellerId } = req.body;
 
-    // Validate request
+    // Input validation
     if (!gigId || !amount || !buyerId || !sellerId) {
       return res.status(400).json({
+        success: false,
         error: 'Missing required fields',
         required: ['gigId', 'amount', 'buyerId', 'sellerId']
       });
@@ -134,9 +135,14 @@ app.post('/api/create-payment', validateFirebaseToken, async (req, res) => {
     });
 
     const order = await paypalClient.execute(request);
-    await paymentRef.update({ paypalOrderId: order.result.id });
+    
+    // Update payment record with PayPal order ID
+    await paymentRef.update({ 
+      paypalOrderId: order.result.id 
+    });
 
-    res.json({
+    // Send response
+    res.status(200).json({
       success: true,
       orderID: order.result.id,
       paymentId: paymentRef.id
@@ -144,9 +150,13 @@ app.post('/api/create-payment', validateFirebaseToken, async (req, res) => {
 
   } catch (error) {
     console.error('Payment creation error:', error);
+    
+    // Send detailed error response
     res.status(500).json({
+      success: false,
       error: 'Failed to create payment',
-      message: error.message
+      message: error.message,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 });
