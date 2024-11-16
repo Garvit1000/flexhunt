@@ -8,9 +8,20 @@ const { admin, db } = require('./config/firebase-config');
 
 const app = express();
 const corsOptions = {
-  origin: process.env.NODE_ENV === 'production'
-    ? ['https://www.flexhunt.co', 'https://flexhunt.co']
-    : 'http://localhost:5173', // Specifically allow Vite's default port
+  origin: (origin, callback) => {
+    const allowedOrigins = [
+      'https://flexhunt.onrender.com',
+      'https://www.flexhunt.co',
+      'https://flexhunt.co',
+      'http://localhost:5173'
+    ];
+    
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
@@ -20,70 +31,79 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 app.options('*', cors(corsOptions));
+const initializePayPalClient = () => {
+  try {
+    const environment = process.env.NODE_ENV === 'production'
+      ? new paypal.core.LiveEnvironment(
+          process.env.PAYPAL_CLIENT_ID,
+          process.env.PAYPAL_CLIENT_SECRET
+        )
+      : new paypal.core.SandboxEnvironment(
+          process.env.PAYPAL_CLIENT_ID,
+          process.env.PAYPAL_CLIENT_SECRET
+        );
+
+    return new paypal.core.PayPalHttpClient(environment);
+  } catch (error) {
+    console.error('PayPal client initialization error:', error);
+    throw new Error('Failed to initialize PayPal client');
+  }
+};
+
+const paypalClient = initializePayPalClient();
+
+// Enhanced error handling middleware
 app.use((err, req, res, next) => {
-  if (err.message === 'CORS Error') {
+  console.error('Error details:', {
+    message: err.message,
+    stack: err.stack,
+    path: req.path,
+    method: req.method,
+    body: req.body,
+    timestamp: new Date().toISOString()
+  });
+
+  if (err.message === 'Not allowed by CORS') {
     return res.status(403).json({
       error: 'CORS Error',
       message: 'Cross-Origin Request Blocked',
       allowedOrigins: corsOptions.origin
     });
   }
-  next(err);
-});
-// PayPal Configuration
-const environment = process.env.NODE_ENV === 'production'
-  ? paypal.core.LiveEnvironment
-  : paypal.core.SandboxEnvironment;
 
-console.log('PayPal Environment:', process.env.NODE_ENV);
-
-const paypalClient = new paypal.core.PayPalHttpClient(
-  new environment(
-    process.env.PAYPAL_CLIENT_ID,
-    process.env.PAYPAL_CLIENT_SECRET
-  )
-);
-
-// Enhanced error handling middleware
-app.use((err, req, res, next) => {
-  console.error('Global error handler:', {
-    error: err.message,
-    stack: err.stack,
+  res.status(err.status || 500).json({
+    error: err.message || 'Internal server error',
     path: req.path,
-    method: req.method,
-    body: req.body
-  });
-  
-  res.status(500).json({
-    error: 'Internal server error',
-    message: err.message,
-    path: req.path
+    timestamp: new Date().toISOString()
   });
 });
 
-
-// Routes
+// Enhanced create payment endpoint
 app.post('/api/create-payment', async (req, res) => {
-  res.header('Access-Control-Allow-Origin', process.env.NODE_ENV === 'production'
-    ? 'https://www.flexhunt.co'
-    : 'http://localhost:5173');
-  res.header('Access-Control-Allow-Credentials', 'true');
+  console.log('Create payment request received:', {
+    body: req.body,
+    headers: {
+      origin: req.headers.origin,
+      'content-type': req.headers['content-type']
+    }
+  });
+
   try {
     // Validate auth token
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith('Bearer ')) {
-      return res.status(401).json({ 
+      return res.status(401).json({
         error: 'Unauthorized',
         message: 'Missing or invalid authorization token'
       });
     }
 
     const token = authHeader.split('Bearer ')[1];
-    await admin.auth().verifyIdToken(token);
+    const decodedToken = await admin.auth().verifyIdToken(token);
 
     const { gigId, buyerId, amount, paymentId, title } = req.body;
 
-    // Validate required fields
+    // Enhanced validation
     if (!gigId || !buyerId || !amount) {
       return res.status(400).json({
         error: 'Missing required fields',
@@ -92,7 +112,7 @@ app.post('/api/create-payment', async (req, res) => {
       });
     }
 
-    // Create PayPal order
+    // Create PayPal order with error handling
     const request = new paypal.orders.OrdersCreateRequest();
     request.prefer("return=representation");
     request.requestBody({
@@ -108,7 +128,17 @@ app.post('/api/create-payment', async (req, res) => {
     });
 
     const order = await paypalClient.execute(request);
-    console.log('PayPal order created successfully:', order.result);
+    console.log('PayPal order created:', {
+      id: order.result.id,
+      status: order.result.status
+    });
+
+    // Update payment document with PayPal order ID
+    await db.collection('payments').doc(paymentId).update({
+      paypalOrderId: order.result.id,
+      status: 'PENDING',
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
 
     res.json({
       orderID: order.result.id,
@@ -116,7 +146,11 @@ app.post('/api/create-payment', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Payment creation error:', error);
+    console.error('Payment creation error:', {
+      message: error.message,
+      stack: error.stack
+    });
+    
     res.status(500).json({
       error: 'Error creating payment',
       message: error.message,
@@ -125,17 +159,26 @@ app.post('/api/create-payment', async (req, res) => {
   }
 });
 
-
+// Enhanced capture payment endpoint
 app.post('/api/capture-payment', async (req, res) => {
+  console.log('Capture payment request received:', {
+    orderID: req.body.orderID
+  });
+
   try {
     const { orderID } = req.body;
 
-    // Capture the PayPal order
     const request = new paypal.orders.OrdersCaptureRequest(orderID);
     const capture = await paypalClient.execute(request);
 
+    console.log('Payment capture response:', {
+      status: capture.result.status,
+      id: capture.result.id
+    });
+
     if (capture.result.status === 'COMPLETED') {
-      // Update payment status in Firestore
+      const batch = db.batch();
+      
       const paymentQuery = await db.collection('payments')
         .where('paypalOrderId', '==', orderID)
         .limit(1)
@@ -145,18 +188,19 @@ app.post('/api/capture-payment', async (req, res) => {
         const paymentDoc = paymentQuery.docs[0];
         const payment = paymentDoc.data();
 
-        // Set escrow release date to 7 days from now
         const escrowReleaseDate = new Date();
         escrowReleaseDate.setDate(escrowReleaseDate.getDate() + 7);
 
-        await paymentDoc.ref.update({
+        // Update payment
+        batch.update(paymentDoc.ref, {
           status: 'COMPLETED',
           escrowReleaseDate,
           capturedAt: admin.firestore.FieldValue.serverTimestamp()
         });
 
-        // Create order record
-        await db.collection('orders').add({
+        // Create order
+        const orderRef = db.collection('orders').doc();
+        batch.set(orderRef, {
           gigId: payment.gigId,
           buyerId: payment.buyerId,
           sellerId: payment.sellerId,
@@ -165,19 +209,34 @@ app.post('/api/capture-payment', async (req, res) => {
           paymentId: paymentDoc.id,
           createdAt: admin.firestore.FieldValue.serverTimestamp()
         });
+
+        await batch.commit();
       }
 
-      res.json({ status: 'COMPLETED' });
+      res.json({ 
+        status: 'COMPLETED',
+        captureId: capture.result.purchase_units[0].payments.captures[0].id
+      });
     } else {
-      res.status(400).json({ error: 'Payment capture failed' });
+      res.status(400).json({ 
+        error: 'Payment capture failed',
+        status: capture.result.status
+      });
     }
 
   } catch (error) {
-    console.error('Error capturing payment:', error);
-    res.status(500).json({ error: 'Error capturing payment' });
+    console.error('Error capturing payment:', {
+      message: error.message,
+      stack: error.stack
+    });
+    
+    res.status(500).json({
+      error: 'Error capturing payment',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    });
   }
 });
-
 // Release funds from escrow
 app.post('/api/release-escrow', async (req, res) => {
   try {
@@ -256,21 +315,17 @@ app.post('/api/dispute-payment', async (req, res) => {
   }
 });
 if (process.env.NODE_ENV === 'production') {
-  // Serve static files from the React frontend app
   app.use(express.static(path.join(__dirname, '../frontend/dist')));
-
-  // Handle React routing, return all requests to React app
-  app.get('*', function(req, res) {
-      res.sendFile(path.join(__dirname,  '../frontend/dist/index.html'));
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, '../frontend/dist/index.html'));
   });
 }
-
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT} in ${process.env.NODE_ENV} mode`);
-  console.log('CORS configured for:', 
-    Array.isArray(corsOptions.origin) 
-      ? corsOptions.origin.join(', ') 
-      : corsOptions.origin
-  );
+  console.log('Server configuration:', {
+    environment: process.env.NODE_ENV,
+    port: PORT,
+    paypalEnvironment: process.env.NODE_ENV === 'production' ? 'live' : 'sandbox'
+  });
 });
