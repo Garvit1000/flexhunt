@@ -1,12 +1,18 @@
 const express = require('express');
 const cors = require('cors');
 const paypal = require('@paypal/checkout-server-sdk');
+const { admin, db } = require('./config/firebase-config');
 require('dotenv').config();
 const path = require('path');
-// Import Firebase configuration
-const { admin, db } = require('./config/firebase-config');
+
+// Constants
+const ESCROW_HOLD_DAYS = 7;
+const DISPUTE_WINDOW_DAYS = 14;
+const PORT = process.env.PORT || 5000;
 
 const app = express();
+
+// CORS Configuration
 const allowedOrigins = [
   'https://flexhunt.onrender.com',
   'https://www.flexhunt.co',
@@ -16,7 +22,7 @@ const allowedOrigins = [
   'http://localhost:5173'
 ];
 
-// Function to normalize origins for comparison
+// Helper Functions
 const normalizeOrigin = (origin) => {
   if (!origin) return null;
   try {
@@ -27,12 +33,16 @@ const normalizeOrigin = (origin) => {
   }
 };
 
-// CORS configuration with domain normalization
+const calculateEscrowReleaseDate = () => {
+  const date = new Date();
+  date.setDate(date.getDate() + ESCROW_HOLD_DAYS);
+  return date;
+};
+
+// CORS Options
 const corsOptions = {
-  origin: function(origin, callback) {
-    if (!origin) {
-      return callback(null, true);
-    }
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
 
     const normalizedRequestOrigin = normalizeOrigin(origin);
     const normalizedAllowedOrigins = allowedOrigins.map(normalizeOrigin);
@@ -41,47 +51,24 @@ const corsOptions = {
       callback(null, true);
     } else {
       console.log('Blocked origin:', origin);
-      console.log('Normalized origin:', normalizedRequestOrigin);
-      console.log('Allowed origins:', normalizedAllowedOrigins);
       callback(new Error('Not allowed by CORS'));
     }
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'Accept', 'X-Requested-With'],
-  exposedHeaders: ['Content-Range', 'X-Content-Range'],
   credentials: true,
-  preflightContinue: false,
-  optionsSuccessStatus: 204,
   maxAge: 86400
 };
 
-// Apply CORS first
-app.use(cors(corsOptions));
-app.use(express.json());
-
-app.use((req, res, next) => {
-  if (req.method === 'OPTIONS') {
-    return next();
-  }
-  
-  if (process.env.NODE_ENV === 'production' && req.headers.host?.startsWith('www.')) {
-    const newUrl = `https://${req.headers.host.replace(/^www\./, '')}${req.url}`;
-    return res.redirect(301, newUrl);
-  }
-  next();
-});
+// PayPal Client Initialization
 const initializePayPalClient = () => {
   try {
+    const clientId = process.env.PAYPAL_CLIENT_ID;
+    const clientSecret = process.env.PAYPAL_CLIENT_SECRET;
     const environment = process.env.NODE_ENV === 'production'
-      ? new paypal.core.LiveEnvironment(
-          process.env.PAYPAL_CLIENT_ID,
-          process.env.PAYPAL_CLIENT_SECRET
-        )
-      : new paypal.core.SandboxEnvironment(
-          process.env.PAYPAL_CLIENT_ID,
-          process.env.PAYPAL_CLIENT_SECRET
-        );
-
+      ? new paypal.core.LiveEnvironment(clientId, clientSecret)
+      : new paypal.core.SandboxEnvironment(clientId, clientSecret);
+    
     return new paypal.core.PayPalHttpClient(environment);
   } catch (error) {
     console.error('PayPal client initialization error:', error);
@@ -89,9 +76,305 @@ const initializePayPalClient = () => {
   }
 };
 
+// Middleware
+app.use(cors(corsOptions));
+app.use(express.json());
+
+// Auth Middleware
+const validateFirebaseToken = async (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) {
+      return res.status(401).json({
+        error: 'Unauthorized',
+        message: 'Missing or invalid authorization token'
+      });
+    }
+
+    const token = authHeader.split('Bearer ')[1];
+    const decodedToken = await admin.auth().verifyIdToken(token);
+    req.user = decodedToken;
+    next();
+  } catch (error) {
+    console.error('Auth error:', error);
+    res.status(401).json({
+      error: 'Authentication failed',
+      message: error.message
+    });
+  }
+};
+
+// Initialize PayPal Client
 const paypalClient = initializePayPalClient();
 
-// Enhanced error handling middleware
+// Routes
+app.post('/api/create-payment', validateFirebaseToken, async (req, res) => {
+  try {
+    const { gigId, amount, title, buyerId, sellerId } = req.body;
+
+    // Validate request
+    if (!gigId || !amount || !buyerId || !sellerId) {
+      return res.status(400).json({
+        error: 'Missing required fields',
+        required: ['gigId', 'amount', 'buyerId', 'sellerId']
+      });
+    }
+
+    // Create payment record
+    const paymentRef = await db.collection('payments').add({
+      gigId,
+      amount: parseFloat(amount),
+      buyerId,
+      sellerId,
+      status: 'PENDING',
+      title: title || `Payment for gig ${gigId}`,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      currency: 'USD',
+      escrowReleaseDate: calculateEscrowReleaseDate(),
+      isDisputed: false,
+      platform: 'PAYPAL'
+    });
+
+    // Create PayPal order
+    const request = new paypal.orders.OrdersCreateRequest();
+    request.prefer("return=representation");
+    request.requestBody({
+      intent: 'CAPTURE',
+      purchase_units: [{
+        amount: {
+          currency_code: 'USD',
+          value: amount.toString()
+        },
+        description: title,
+        custom_id: `${gigId}_${paymentRef.id}`
+      }],
+      application_context: {
+        brand_name: 'FlexHunt',
+        landing_page: 'NO_PREFERENCE',
+        user_action: 'PAY_NOW',
+        return_url: 'https://www.flexhunt.co/payment/success',
+        cancel_url: 'https://www.flexhunt.co/payment/cancel'
+      }
+    });
+
+    const order = await paypalClient.execute(request);
+    await paymentRef.update({ paypalOrderId: order.result.id });
+
+    res.json({
+      success: true,
+      orderID: order.result.id,
+      paymentId: paymentRef.id
+    });
+
+  } catch (error) {
+    console.error('Payment creation error:', error);
+    res.status(500).json({
+      error: 'Failed to create payment',
+      message: error.message
+    });
+  }
+});
+
+app.post('/api/capture-payment', validateFirebaseToken, async (req, res) => {
+  try {
+    const { orderID } = req.body;
+    const request = new paypal.orders.OrdersCaptureRequest(orderID);
+    const capture = await paypalClient.execute(request);
+
+    if (capture.result.status === 'COMPLETED') {
+      const batch = db.batch();
+      
+      const paymentQuery = await db.collection('payments')
+        .where('paypalOrderId', '==', orderID)
+        .limit(1)
+        .get();
+
+      if (paymentQuery.empty) {
+        throw new Error('Payment record not found');
+      }
+
+      const paymentDoc = paymentQuery.docs[0];
+      const payment = paymentDoc.data();
+
+      // Update payment status
+      batch.update(paymentDoc.ref, {
+        status: 'IN_ESCROW',
+        capturedAt: admin.firestore.FieldValue.serverTimestamp(),
+        escrowReleaseDate: calculateEscrowReleaseDate(),
+        paypalCaptureId: capture.result.purchase_units[0].payments.captures[0].id
+      });
+
+      // Create order record
+      const orderRef = db.collection('orders').doc();
+      batch.set(orderRef, {
+        gigId: payment.gigId,
+        paymentId: paymentDoc.id,
+        buyerId: payment.buyerId,
+        sellerId: payment.sellerId,
+        amount: payment.amount,
+        status: 'IN_PROGRESS',
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        title: payment.title
+      });
+
+      await batch.commit();
+
+      res.json({
+        success: true,
+        status: 'COMPLETED',
+        paymentId: paymentDoc.id,
+        orderId: orderRef.id
+      });
+    } else {
+      throw new Error(`Payment capture failed: ${capture.result.status}`);
+    }
+
+  } catch (error) {
+    console.error('Payment capture error:', error);
+    res.status(500).json({
+      error: 'Failed to capture payment',
+      message: error.message
+    });
+  }
+});
+
+app.post('/api/release-escrow', validateFirebaseToken, async (req, res) => {
+  try {
+    const { paymentId } = req.body;
+    const paymentRef = db.collection('payments').doc(paymentId);
+    
+    const payment = await paymentRef.get();
+    if (!payment.exists) {
+      return res.status(404).json({ error: 'Payment not found' });
+    }
+
+    const paymentData = payment.data();
+    
+    // Validation checks
+    if (paymentData.status !== 'IN_ESCROW') {
+      return res.status(400).json({ error: 'Payment is not in escrow' });
+    }
+
+    const now = new Date();
+    const escrowReleaseDate = paymentData.escrowReleaseDate.toDate();
+    
+    if (now < escrowReleaseDate) {
+      return res.status(400).json({
+        error: 'Escrow period not completed',
+        releaseDate: escrowReleaseDate
+      });
+    }
+
+    if (paymentData.isDisputed) {
+      return res.status(400).json({ error: 'Payment is under dispute' });
+    }
+
+    // Release funds
+    const batch = db.batch();
+
+    batch.update(paymentRef, {
+      status: 'COMPLETED',
+      releasedAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    const orderQuery = await db.collection('orders')
+      .where('paymentId', '==', paymentId)
+      .limit(1)
+      .get();
+
+    if (!orderQuery.empty) {
+      batch.update(orderQuery.docs[0].ref, {
+        status: 'COMPLETED',
+        completedAt: admin.firestore.FieldValue.serverTimestamp()
+      });
+    }
+
+    await batch.commit();
+
+    res.json({
+      success: true,
+      status: 'RELEASED',
+      paymentId
+    });
+
+  } catch (error) {
+    console.error('Escrow release error:', error);
+    res.status(500).json({
+      error: 'Failed to release escrow',
+      message: error.message
+    });
+  }
+});
+
+app.post('/api/create-dispute', validateFirebaseToken, async (req, res) => {
+  try {
+    const { paymentId, reason, evidence } = req.body;
+    const userId = req.user.uid;
+
+    const paymentRef = db.collection('payments').doc(paymentId);
+    const payment = await paymentRef.get();
+
+    if (!payment.exists) {
+      return res.status(404).json({ error: 'Payment not found' });
+    }
+
+    const paymentData = payment.data();
+
+    // Verify dispute eligibility
+    const now = new Date();
+    const disputeWindowEnd = new Date(paymentData.capturedAt.toDate());
+    disputeWindowEnd.setDate(disputeWindowEnd.getDate() + DISPUTE_WINDOW_DAYS);
+
+    if (now > disputeWindowEnd) {
+      return res.status(400).json({ error: 'Dispute window has expired' });
+    }
+
+    if (userId !== paymentData.buyerId && userId !== paymentData.sellerId) {
+      return res.status(403).json({ error: 'Unauthorized to create dispute' });
+    }
+
+    const batch = db.batch();
+
+    // Create dispute record
+    const disputeRef = db.collection('disputes').doc();
+    batch.set(disputeRef, {
+      paymentId,
+      createdBy: userId,
+      reason,
+      evidence: evidence || [],
+      status: 'OPEN',
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      buyerId: paymentData.buyerId,
+      sellerId: paymentData.sellerId,
+      amount: paymentData.amount
+    });
+
+    // Update payment status
+    batch.update(paymentRef, {
+      isDisputed: true,
+      disputeId: disputeRef.id,
+      status: 'DISPUTED'
+    });
+
+    await batch.commit();
+
+    res.json({
+      success: true,
+      disputeId: disputeRef.id,
+      status: 'DISPUTE_CREATED'
+    });
+
+  } catch (error) {
+    console.error('Dispute creation error:', error);
+    res.status(500).json({
+      error: 'Failed to create dispute',
+      message: error.message
+    });
+  }
+});
+
+// Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Error details:', {
     message: err.message,
@@ -106,294 +389,26 @@ app.use((err, req, res, next) => {
     return res.status(403).json({
       error: 'CORS Error',
       message: 'Cross-Origin Request Blocked',
-      allowedOrigins: corsOptions.origin
-    });
-  }
-
-  res.status(err.status || 500).json({
-    error: err.message || 'Internal server error',
-    path: req.path,
-    timestamp: new Date().toISOString()
-  });
-});
-
-app.use((req, res, next) => {
-  if (process.env.NODE_ENV === 'production' && req.headers.host.startsWith('www.')) {
-    const newUrl = `https://${req.headers.host.replace(/^www\./, '')}${req.url}`;
-    return res.redirect(301, newUrl);
-  }
-  next();
-});
-
-if (process.env.NODE_ENV === 'production') {
-  app.use(express.static(path.join(__dirname, '../frontend/dist')));
-}
-
-// Enhanced create payment endpoint
-app.post('/api/create-payment', async (req, res) => {
-  console.log('Create payment request received:', {
-    body: req.body,
-    headers: {
-      origin: req.headers.origin,
-      'content-type': req.headers['content-type']
-    }
-  });
-
-  try {
-    // Validate auth token
-    const authHeader = req.headers.authorization;
-    if (!authHeader?.startsWith('Bearer ')) {
-      return res.status(401).json({
-        error: 'Unauthorized',
-        message: 'Missing or invalid authorization token'
-      });
-    }
-
-    const token = authHeader.split('Bearer ')[1];
-    const decodedToken = await admin.auth().verifyIdToken(token);
-
-    const { gigId, buyerId, amount, paymentId, title } = req.body;
-
-    // Enhanced validation
-    if (!gigId || !buyerId || !amount) {
-      return res.status(400).json({
-        error: 'Missing required fields',
-        message: 'Please provide gigId, buyerId, and amount',
-        received: { gigId, buyerId, amount }
-      });
-    }
-
-    // Create PayPal order with error handling
-    const request = new paypal.orders.OrdersCreateRequest();
-    request.prefer("return=representation");
-    request.requestBody({
-      intent: 'CAPTURE',
-      purchase_units: [{
-        amount: {
-          currency_code: 'USD',
-          value: amount.toString()
-        },
-        description: title ? `Payment for: ${title}` : `Payment for gig ${gigId}`,
-        custom_id: `${gigId}_${buyerId}_${Date.now()}`
-      }]
-    });
-
-    const order = await paypalClient.execute(request);
-    console.log('PayPal order created:', {
-      id: order.result.id,
-      status: order.result.status
-    });
-
-    // Update payment document with PayPal order ID
-    await db.collection('payments').doc(paymentId).update({
-      paypalOrderId: order.result.id,
-      status: 'PENDING',
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
-
-    res.json({
-      orderID: order.result.id,
-      status: order.result.status
-    });
-
-  } catch (error) {
-    console.error('Payment creation error:', {
-      message: error.message,
-      stack: error.stack
-    });
-    
-    res.status(500).json({
-      error: 'Error creating payment',
-      message: error.message,
-      timestamp: new Date().toISOString()
-    });
-  }
-});
-
-// Enhanced capture payment endpoint
-app.post('/api/capture-payment', async (req, res) => {
-  console.log('Capture payment request received:', {
-    orderID: req.body.orderID
-  });
-
-  try {
-    const { orderID } = req.body;
-
-    const request = new paypal.orders.OrdersCaptureRequest(orderID);
-    const capture = await paypalClient.execute(request);
-
-    console.log('Payment capture response:', {
-      status: capture.result.status,
-      id: capture.result.id
-    });
-
-    if (capture.result.status === 'COMPLETED') {
-      const batch = db.batch();
-      
-      const paymentQuery = await db.collection('payments')
-        .where('paypalOrderId', '==', orderID)
-        .limit(1)
-        .get();
-
-      if (!paymentQuery.empty) {
-        const paymentDoc = paymentQuery.docs[0];
-        const payment = paymentDoc.data();
-
-        const escrowReleaseDate = new Date();
-        escrowReleaseDate.setDate(escrowReleaseDate.getDate() + 7);
-
-        // Update payment
-        batch.update(paymentDoc.ref, {
-          status: 'COMPLETED',
-          escrowReleaseDate,
-          capturedAt: admin.firestore.FieldValue.serverTimestamp()
-        });
-
-        // Create order
-        const orderRef = db.collection('orders').doc();
-        batch.set(orderRef, {
-          gigId: payment.gigId,
-          buyerId: payment.buyerId,
-          sellerId: payment.sellerId,
-          amount: payment.amount,
-          status: 'IN_PROGRESS',
-          paymentId: paymentDoc.id,
-          createdAt: admin.firestore.FieldValue.serverTimestamp()
-        });
-
-        await batch.commit();
-      }
-
-      res.json({ 
-        status: 'COMPLETED',
-        captureId: capture.result.purchase_units[0].payments.captures[0].id
-      });
-    } else {
-      res.status(400).json({ 
-        error: 'Payment capture failed',
-        status: capture.result.status
-      });
-    }
-
-  } catch (error) {
-    console.error('Error capturing payment:', {
-      message: error.message,
-      stack: error.stack
-    });
-    
-    res.status(500).json({
-      error: 'Error capturing payment',
-      message: error.message,
-      timestamp: new Date().toISOString()
-    });
-  }
-});
-// Release funds from escrow
-app.post('/api/release-escrow', async (req, res) => {
-  try {
-    const { paymentId } = req.body;
-
-    const paymentDoc = await db.collection('payments').doc(paymentId).get();
-    if (!paymentDoc.exists) {
-      return res.status(404).json({ error: 'Payment not found' });
-    }
-
-    const payment = paymentDoc.data();
-    const now = new Date();
-    const escrowReleaseDate = payment.escrowReleaseDate.toDate();
-
-    if (now < escrowReleaseDate) {
-      return res.status(400).json({ error: 'Escrow period not completed' });
-    }
-
-    await paymentDoc.ref.update({
-      status: 'RELEASED',
-      releasedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
-
-    // Update order status
-    const orderQuery = await db.collection('orders')
-      .where('paymentId', '==', paymentId)
-      .limit(1)
-      .get();
-
-    if (!orderQuery.empty) {
-      await orderQuery.docs[0].ref.update({
-        status: 'COMPLETED',
-        completedAt: admin.firestore.FieldValue.serverTimestamp()
-      });
-    }
-
-    res.json({ status: 'SUCCESS' });
-
-  } catch (error) {
-    console.error('Error releasing escrow:', error);
-    res.status(500).json({ error: 'Error releasing escrow' });
-  }
-});
-
-// Dispute handling
-app.post('/api/dispute-payment', async (req, res) => {
-  try {
-    const { paymentId, reason } = req.body;
-
-    const paymentDoc = await db.collection('payments').doc(paymentId).get();
-    if (!paymentDoc.exists) {
-      return res.status(404).json({ error: 'Payment not found' });
-    }
-
-    await paymentDoc.ref.update({
-      isDisputed: true,
-      disputeReason: reason,
-      disputedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
-
-    // Create dispute record
-    await db.collection('disputes').add({
-      paymentId,
-      reason,
-      status: 'OPEN',
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      buyerId: paymentDoc.data().buyerId,
-      sellerId: paymentDoc.data().sellerId
-    });
-
-    res.json({ status: 'DISPUTE_CREATED' });
-
-  } catch (error) {
-    console.error('Error creating dispute:', error);
-    res.status(500).json({ error: 'Error creating dispute' });
-  }
-});
-if (process.env.NODE_ENV === 'production') {
-  app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, '../frontend/dist/index.html'));
-  });
-}
-app.use((err, req, res, next) => {
-  console.error('Error details:', {
-    message: err.message,
-    origin: req.headers.origin,
-    path: req.path,
-    method: req.method
-  });
-
-  if (err.message === 'Not allowed by CORS') {
-    return res.status(403).json({
-      error: 'CORS Error',
-      message: 'Cross-Origin Request Blocked',
       requestOrigin: req.headers.origin,
       allowedOrigins: allowedOrigins.map(normalizeOrigin)
     });
   }
-  
+
   res.status(err.status || 500).json({
     error: err.message || 'Internal server error',
     timestamp: new Date().toISOString()
   });
 });
 
-const PORT = process.env.PORT || 5000;
+// Production settings
+if (process.env.NODE_ENV === 'production') {
+  app.use(express.static(path.join(__dirname, '../frontend/dist')));
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, '../frontend/dist/index.html'));
+  });
+}
+
+// Start server
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT} in ${process.env.NODE_ENV} mode`);
   console.log('Allowed origins:', allowedOrigins);
