@@ -154,7 +154,7 @@ const getApiBaseUrl = () => {
     }
   };
 
-  const handleBuyNow = async () => {
+ const handleBuyNow = async () => {
   if (!currentUser) {
     setError('Please log in to purchase this gig');
     return;
@@ -166,7 +166,7 @@ const getApiBaseUrl = () => {
 
     const token = await currentUser.getIdToken();
     const API_BASE_URL = getApiBaseUrl();
-
+    
     // Create payment in Firebase
     const db = getFirestore();
     const paymentDoc = await addDoc(collection(db, 'payments'), {
@@ -179,8 +179,7 @@ const getApiBaseUrl = () => {
       title: gig.title
     });
 
-    console.log('Making API request to:', `${API_BASE_URL}/api/create-payment`);
-    
+    // Make API request with proper error handling
     const response = await fetch(`${API_BASE_URL}/api/create-payment`, {
       method: 'POST',
       headers: {
@@ -198,24 +197,17 @@ const getApiBaseUrl = () => {
       })
     });
 
-    // Log response details for debugging
-    console.log('Response status:', response.status);
-    const responseText = await response.text();
-    console.log('Response text:', responseText);
-
+    // Check if response is ok before trying to parse JSON
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+      const errorText = await response.text();
+      throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
     }
 
-    let data;
-    try {
-      data = JSON.parse(responseText);
-    } catch (e) {
-      console.error('JSON parse error:', e);
-      throw new Error('Invalid response format from server');
-    }
+    // Parse JSON response safely
+    const data = await response.json();
 
-    if (!data.success || !data.orderID) {
+    // Validate response data
+    if (!data || !data.success || !data.orderID) {
       throw new Error('Invalid response data from server');
     }
 
@@ -232,12 +224,14 @@ const getApiBaseUrl = () => {
             },
             credentials: 'include',
             body: JSON.stringify({
-              orderID: paypalData.orderID
+              orderID: paypalData.orderID,
+              paymentId: paymentDoc.id
             })
           });
 
           if (!captureResponse.ok) {
-            throw new Error('Failed to capture payment');
+            const errorText = await captureResponse.text();
+            throw new Error(`Failed to capture payment: ${errorText}`);
           }
 
           const captureResult = await captureResponse.json();
@@ -267,6 +261,12 @@ const getApiBaseUrl = () => {
           title: "Payment Error",
           description: err.message || 'An error occurred during payment',
         });
+      },
+      onCancel: () => {
+        toast({
+          title: "Payment Cancelled",
+          description: "You have cancelled the payment process.",
+        });
       }
     });
 
@@ -284,11 +284,22 @@ const getApiBaseUrl = () => {
       title: "Payment Error",
       description: err.message || 'Failed to process payment',
     });
+
+    // Clean up failed payment document
+    try {
+      if (paymentDoc) {
+        await updateDoc(paymentDoc.ref, {
+          status: 'FAILED',
+          error: err.message
+        });
+      }
+    } catch (cleanupErr) {
+      console.error('Failed to update payment status:', cleanupErr);
+    }
   } finally {
     setProcessingPayment(false);
   }
 };
-
   if (loading) return <div className="text-center mt-8">Loading...</div>;
   if (error) return (
     <Alert variant="destructive" className="max-w-2xl mx-auto mt-8">
