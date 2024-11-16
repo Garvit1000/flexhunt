@@ -7,7 +7,7 @@ const path = require('path');
 const { admin, db } = require('./config/firebase-config');
 
 const app = express();
-constallowedOrigins = [
+const allowedOrigins = [
   'https://flexhunt.onrender.com',
   'https://www.flexhunt.co',
   'https://flexhunt.co',
