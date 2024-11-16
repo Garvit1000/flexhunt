@@ -7,28 +7,55 @@ const path = require('path');
 const { admin, db } = require('./config/firebase-config');
 
 const app = express();
-const allowedOrigins = [
+constallowedOrigins = [
   'https://flexhunt.onrender.com',
   'https://www.flexhunt.co',
   'https://flexhunt.co',
+  'http://www.flexhunt.co',
+  'http://flexhunt.co',
   'http://localhost:5173'
 ];
 
-// Enhanced CORS configuration
+// Function to normalize origins for comparison
+const normalizeOrigin = (origin) => {
+  if (!origin) return null;
+  try {
+    const url = new URL(origin);
+    // Remove 'www.' if present and return the origin
+    return url.protocol + '//' + url.host.replace(/^www\./, '');
+  } catch (e) {
+    return origin;
+  }
+};
+
+// Enhanced CORS configuration with domain normalization
 const corsOptions = {
   origin: function(origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin || allowedOrigins.includes(origin)) {
+    if (!origin) {
+      // Allow requests with no origin (like mobile apps or curl requests)
+      return callback(null, true);
+    }
+
+    // Normalize the request origin and allowed origins for comparison
+    const normalizedRequestOrigin = normalizeOrigin(origin);
+    const normalizedAllowedOrigins = allowedOrigins.map(normalizeOrigin);
+
+    if (normalizedAllowedOrigins.includes(normalizedRequestOrigin)) {
       callback(null, true);
     } else {
+      console.log('Blocked origin:', origin);
+      console.log('Normalized origin:', normalizedRequestOrigin);
+      console.log('Allowed origins:', normalizedAllowedOrigins);
       callback(new Error('Not allowed by CORS'));
     }
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'Accept', 'X-Requested-With'],
+  exposedHeaders: ['Content-Range', 'X-Content-Range'],
   credentials: true,
-  preflightContinue: false,  // Important: Prevent preflight from being passed down
-  optionsSuccessStatus: 204  // Some legacy browsers (IE11, various SmartTVs) choke on 204
+  preflightContinue: false,
+  optionsSuccessStatus: 204,
+  maxAge: 86400 // CORS preflight cache time in seconds (24 hours)
 };
 
 
@@ -81,6 +108,15 @@ app.use((err, req, res, next) => {
     timestamp: new Date().toISOString()
   });
 });
+
+app.use((req, res, next) => {
+  if (process.env.NODE_ENV === 'production' && req.headers.host.startsWith('www.')) {
+    const newUrl = `https://${req.headers.host.replace(/^www\./, '')}${req.url}`;
+    return res.redirect(301, newUrl);
+  }
+  next();
+});
+
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, '../frontend/dist')));
 }
@@ -327,22 +363,30 @@ if (process.env.NODE_ENV === 'production') {
   });
 }
 app.use((err, req, res, next) => {
+  console.error('Error details:', {
+    message: err.message,
+    origin: req.headers.origin,
+    path: req.path,
+    method: req.method
+  });
+
   if (err.message === 'Not allowed by CORS') {
     return res.status(403).json({
       error: 'CORS Error',
       message: 'Cross-Origin Request Blocked',
+      requestOrigin: req.headers.origin,
       allowedOrigins
     });
   }
   
-  console.error('Error:', err);
-  res.status(500).json({
-    error: 'Internal Server Error',
-    message: process.env.NODE_ENV === 'development' ? err.message : 'Something went wrong'
+  res.status(err.status || 500).json({
+    error: err.message || 'Internal server error',
+    timestamp: new Date().toISOString()
   });
 });
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT} in ${process.env.NODE_ENV} mode`);
+  console.log('Allowed origins:', allowedOrigins);
 });
