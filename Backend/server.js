@@ -13,7 +13,6 @@ const PORT = process.env.PORT || 5000;
 
 const app = express();
 
-// CORS Configuration
 const allowedOrigins = [
   'https://flexhunt.onrender.com',
   'https://www.flexhunt.co',
@@ -27,7 +26,7 @@ const corsOptions = {
     if (!origin) return callback(null, true);
     
     if (allowedOrigins.indexOf(origin) !== -1) {
-      callback(null, true);
+      callback(null, origin); // Return the matching origin instead of true
     } else {
       callback(new Error('Not allowed by CORS'));
     }
@@ -44,21 +43,6 @@ const corsOptions = {
 // Middleware
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
-app.use((req, res, next) => {
-  // Ensure these headers are set for all responses
-  res.header('Access-Control-Allow-Origin', allowedOrigins);
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Origin, Accept, X-Requested-With');
-  res.header('Access-Control-Allow-Credentials', true);
-  
-  // Handle preflight
-  if (req.method === 'OPTIONS') {
-    return res.status(204).end();
-  }
-  
-  next();
-});
-
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
