@@ -208,32 +208,29 @@ const handleBuyNow = async () => {
       })
     });
 
-    // Log raw response details
+    // Log response details
     console.log('Response status:', response.status);
     console.log('Response headers:', Object.fromEntries(response.headers.entries()));
     
-    let responseText;
-    try {
-      const response = await fetch(...);
-      const responseText = await response.text();
-       console.log('Raw response:', {
-        status: response.status,
+    const responseText = await response.text();
+    console.log('Raw response:', {
+      status: response.status,
       statusText: response.statusText,
-     headers: Object.fromEntries(response.headers),
-       body: responseText
-       });
-      
-      // Only try to parse if we have content
-      if (!responseText) {
-        throw new Error('Empty response from server');
-      }
-      
-      const data = JSON.parse(responseText);
-      
-      // Validate response structure
-      if (!response.ok || !data.success || !data.orderID) {
-        throw new Error(`Invalid response structure: ${JSON.stringify(data)}`);
-      }
+      headers: Object.fromEntries(response.headers),
+      body: responseText
+    });
+    
+    // Only try to parse if we have content
+    if (!responseText) {
+      throw new Error('Empty response from server');
+    }
+    
+    const data = JSON.parse(responseText);
+    
+    // Validate response structure
+    if (!response.ok || !data.success || !data.orderID) {
+      throw new Error(`Invalid response structure: ${JSON.stringify(data)}`);
+    }
 
       // Initialize PayPal buttons with validated data
       const paypalButtons = window.paypal.Buttons({
