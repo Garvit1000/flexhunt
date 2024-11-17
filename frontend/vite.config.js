@@ -6,20 +6,19 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      // eslint-disable-next-line no-undef
       "@": path.resolve(__dirname, "./src"),
-    },
-    build: {
-      outDir: 'dist',
-    },
-    server: {
-      port: 5173,
-      proxy: {
-        '/api': {
-          target: process.env.VITE_API_URL || 'http://localhost:5000',
-          changeOrigin: true
-        }
-      }
     }
   },
+  build: {
+    outDir: 'dist',
+  },
+  server: {
+    port: 5173,
+    proxy: {
+      '/api': {
+        target: process.env.VITE_API_URL || 'http://localhost:5000',
+        changeOrigin: true
+      }
+    }
+  }
 })
