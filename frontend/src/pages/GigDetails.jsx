@@ -181,23 +181,12 @@ const handleBuyNow = async () => {
       title: gig.title
     });
 
-    // Log request payload
-    console.log('Payment request payload:', {
-      gigId: id,
-      paymentId: paymentDocRef.id,
-      amount: gig.startingPrice,
-      title: gig.title,
-      buyerId: currentUser.uid,
-      sellerId: gig.providerId
-    });
-
     const response = await fetch(`${API_BASE_URL}/api/create-payment`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`
       },
-      credentials: 'include',
       body: JSON.stringify({
         gigId: id,
         paymentId: paymentDocRef.id,
@@ -208,31 +197,18 @@ const handleBuyNow = async () => {
       })
     });
 
-    // Log response details
-    console.log('Response status:', response.status);
-    console.log('Response headers:', Object.fromEntries(response.headers.entries()));
-    
-    const responseText = await response.text();
-    console.log('Raw response:', {
-      status: response.status,
-      statusText: response.statusText,
-      headers: Object.fromEntries(response.headers),
-      body: responseText
-    });
-    
-    // Only try to parse if we have content
-    if (!responseText) {
-      throw new Error('Empty response from server');
-    }
-    
-    const data = JSON.parse(responseText);
-    
-    // Validate response structure
-    if (!response.ok || !data.success || !data.orderID) {
-      throw new Error(`Invalid response structure: ${JSON.stringify(data)}`);
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Server error: ${response.status} - ${errorText}`);
     }
 
-    // Initialize PayPal buttons with validated data
+    const data = await response.json();
+    
+    if (!data || !data.orderID) {
+      throw new Error('Invalid response from server');
+    }
+
+    // Initialize PayPal buttons
     const paypalButtons = window.paypal.Buttons({
       orderID: data.orderID,
       onApprove: async (paypalData) => {
@@ -243,7 +219,6 @@ const handleBuyNow = async () => {
               'Content-Type': 'application/json',
               'Authorization': `Bearer ${token}`
             },
-            credentials: 'include',
             body: JSON.stringify({
               orderID: paypalData.orderID,
               paymentId: paymentDocRef.id
@@ -251,8 +226,7 @@ const handleBuyNow = async () => {
           });
 
           if (!captureResponse.ok) {
-            const errorText = await captureResponse.text();
-            throw new Error(`Capture failed with status ${captureResponse.status}: ${errorText}`);
+            throw new Error(`Capture failed: ${captureResponse.status}`);
           }
 
           const captureData = await captureResponse.json();
@@ -267,11 +241,7 @@ const handleBuyNow = async () => {
             throw new Error(`Unexpected capture status: ${captureData.status}`);
           }
         } catch (err) {
-          console.error('Payment capture error:', {
-            error: err,
-            message: err.message,
-            stack: err.stack
-          });
+          console.error('Payment capture error:', err);
           toast({
             variant: "destructive",
             title: "Payment Failed",
@@ -280,21 +250,11 @@ const handleBuyNow = async () => {
         }
       },
       onError: (err) => {
-        console.error('PayPal button error:', {
-          error: err,
-          message: err.message,
-          stack: err.stack
-        });
+        console.error('PayPal button error:', err);
         toast({
           variant: "destructive",
           title: "Payment Error",
           description: "PayPal encountered an error. Please try again.",
-        });
-      },
-      onCancel: () => {
-        toast({
-          title: "Payment Cancelled",
-          description: "You have cancelled the payment process.",
         });
       }
     });
@@ -308,20 +268,9 @@ const handleBuyNow = async () => {
     await paypalButtons.render('#paypal-button-container');
 
   } catch (err) {
-    console.error('Payment processing error:', {
-      error: err,
-      message: err.message,
-      stack: err.stack,
-      paymentDocRef: paymentDocRef?.id
-    });
-
+    console.error('Payment processing error:', err);
     setError(err.message || 'Failed to process payment');
-    toast({
-      variant: "destructive",
-      title: "Payment Error",
-      description: err.message || 'Failed to process payment',
-    });
-
+    
     // Update failed payment document
     if (paymentDocRef) {
       try {
@@ -330,14 +279,19 @@ const handleBuyNow = async () => {
           error: err.message,
           errorDetails: {
             timestamp: new Date().toISOString(),
-            message: err.message,
-            stack: err.stack
+            message: err.message
           }
         });
-      } catch (cleanupErr) {
-        console.error('Failed to update payment status:', cleanupErr);
+      } catch (updateErr) {
+        console.error('Failed to update payment status:', updateErr);
       }
     }
+
+    toast({
+      variant: "destructive",
+      title: "Payment Error",
+      description: err.message || 'Failed to process payment',
+    });
   } finally {
     setProcessingPayment(false);
   }
