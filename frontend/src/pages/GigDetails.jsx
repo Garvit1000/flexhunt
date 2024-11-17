@@ -214,8 +214,14 @@ const handleBuyNow = async () => {
     
     let responseText;
     try {
-      responseText = await response.text();
-      console.log('Raw response text:', responseText);
+      const response = await fetch(...);
+      const responseText = await response.text();
+       console.log('Raw response:', {
+        status: response.status,
+      statusText: response.statusText,
+     headers: Object.fromEntries(response.headers),
+       body: responseText
+       });
       
       // Only try to parse if we have content
       if (!responseText) {
