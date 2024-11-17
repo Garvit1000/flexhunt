@@ -232,90 +232,80 @@ const handleBuyNow = async () => {
       throw new Error(`Invalid response structure: ${JSON.stringify(data)}`);
     }
 
-      // Initialize PayPal buttons with validated data
-      const paypalButtons = window.paypal.Buttons({
-        orderID: data.orderID,
-        onApprove: async (paypalData) => {
-          try {
-            const captureResponse = await fetch(`${API_BASE_URL}/api/capture-payment`, {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`
-              },
-              credentials: 'include',
-              body: JSON.stringify({
-                orderID: paypalData.orderID,
-                paymentId: paymentDocRef.id
-              })
-            });
+    // Initialize PayPal buttons with validated data
+    const paypalButtons = window.paypal.Buttons({
+      orderID: data.orderID,
+      onApprove: async (paypalData) => {
+        try {
+          const captureResponse = await fetch(`${API_BASE_URL}/api/capture-payment`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`
+            },
+            credentials: 'include',
+            body: JSON.stringify({
+              orderID: paypalData.orderID,
+              paymentId: paymentDocRef.id
+            })
+          });
 
-            if (!captureResponse.ok) {
-              const errorText = await captureResponse.text();
-              throw new Error(`Capture failed with status ${captureResponse.status}: ${errorText}`);
-            }
-
-            const captureData = await captureResponse.json();
-            
-            if (captureData.status === 'COMPLETED') {
-              toast({
-                title: "Payment Successful",
-                description: "Your payment has been processed successfully.",
-              });
-              navigate('/orders');
-            } else {
-              throw new Error(`Unexpected capture status: ${captureData.status}`);
-            }
-          } catch (err) {
-            console.error('Payment capture error:', {
-              error: err,
-              message: err.message,
-              stack: err.stack
-            });
-            toast({
-              variant: "destructive",
-              title: "Payment Failed",
-              description: err.message || 'Failed to complete payment',
-            });
+          if (!captureResponse.ok) {
+            const errorText = await captureResponse.text();
+            throw new Error(`Capture failed with status ${captureResponse.status}: ${errorText}`);
           }
-        },
-        onError: (err) => {
-          console.error('PayPal button error:', {
+
+          const captureData = await captureResponse.json();
+          
+          if (captureData.status === 'COMPLETED') {
+            toast({
+              title: "Payment Successful",
+              description: "Your payment has been processed successfully.",
+            });
+            navigate('/orders');
+          } else {
+            throw new Error(`Unexpected capture status: ${captureData.status}`);
+          }
+        } catch (err) {
+          console.error('Payment capture error:', {
             error: err,
             message: err.message,
             stack: err.stack
           });
           toast({
             variant: "destructive",
-            title: "Payment Error",
-            description: "PayPal encountered an error. Please try again.",
-          });
-        },
-        onCancel: () => {
-          toast({
-            title: "Payment Cancelled",
-            description: "You have cancelled the payment process.",
+            title: "Payment Failed",
+            description: err.message || 'Failed to complete payment',
           });
         }
-      });
-
-      const container = document.getElementById('paypal-button-container');
-      if (!container) {
-        throw new Error('PayPal button container not found');
+      },
+      onError: (err) => {
+        console.error('PayPal button error:', {
+          error: err,
+          message: err.message,
+          stack: err.stack
+        });
+        toast({
+          variant: "destructive",
+          title: "Payment Error",
+          description: "PayPal encountered an error. Please try again.",
+        });
+      },
+      onCancel: () => {
+        toast({
+          title: "Payment Cancelled",
+          description: "You have cancelled the payment process.",
+        });
       }
-      
-      container.innerHTML = '';
-      await paypalButtons.render('#paypal-button-container');
+    });
 
-    } catch (parseError) {
-      console.error('Response parsing error:', {
-        error: parseError,
-        responseText,
-        status: response.status,
-        statusText: response.statusText
-      });
-      throw new Error(`Failed to process server response: ${parseError.message}`);
+    const container = document.getElementById('paypal-button-container');
+    if (!container) {
+      throw new Error('PayPal button container not found');
     }
+    
+    container.innerHTML = '';
+    await paypalButtons.render('#paypal-button-container');
 
   } catch (err) {
     console.error('Payment processing error:', {
