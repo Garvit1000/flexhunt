@@ -170,16 +170,14 @@ const paypalClient = initializePayPalClient();
 // Routes
 app.post('/api/create-payment', validateFirebaseToken, async (req, res) => {
   try {
-    const { gigId, amount, title, buyerId, sellerId, paymentId } = req.body;
-
-    // Get user details
-    const buyerRecord = await admin.auth().getUser(buyerId);
-    const sellerRecord = await admin.auth().getUser(sellerId);
+    const { gigId, amount, paymentId } = req.body;
     
+    if (!gigId || !amount || !paymentId) {
+      throw new Error('Missing required payment details');
+    }
+
     // Get gig details
     const gigDoc = await db.collection('gigs').doc(gigId).get();
-    const gigData = gigDoc.data();
-
     if (!gigDoc.exists) {
       throw new Error('Gig not found');
     }
@@ -194,7 +192,6 @@ app.post('/api/create-payment', validateFirebaseToken, async (req, res) => {
           currency_code: 'USD',
           value: parseFloat(amount).toFixed(2)
         },
-        description: title || gigData.title,
         custom_id: `${gigId}_${paymentId}`
       }],
       application_context: {
@@ -212,32 +209,35 @@ app.post('/api/create-payment', validateFirebaseToken, async (req, res) => {
       throw new Error('Invalid PayPal order response');
     }
 
-    // Update payment document with all required fields
+    // Calculate escrow release date
+    const escrowReleaseDate = new Date();
+    escrowReleaseDate.setDate(escrowReleaseDate.getDate() + 7); // 7 days escrow period
+
+    // Update payment document with schema-matching fields
     await db.collection('payments').doc(paymentId).update({
       amount: parseFloat(amount),
-      buyerEmail: buyerRecord.email,
-      buyerId: buyerId,
-      buyerName: buyerRecord.displayName || buyerRecord.email,
-      category: gigData.category,
-      currency: 'USD',
-      deliveryTime: gigData.deliveryTime,
+      buyerId: req.user.uid,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      escrowReleaseDate: escrowReleaseDate,
       gigId: gigId,
-      gigTitle: gigData.title,
-      paymentMethod: 'PAYPAL',
+      isDisputed: false,
       paypalOrderId: order.result.id,
-      sellerEmail: sellerRecord.email,
-      sellerId: sellerId,
-      sellerName: sellerRecord.displayName || sellerRecord.email,
+      sellerId: gigDoc.data().providerId, // Assuming providerId is stored in gig document
       status: 'PENDING',
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     });
 
-    // Send successful response
+    // Send successful response with required fields
     res.status(200).json({
       status: 'success',
       success: true,
       orderID: order.result.id,
-      paymentId: paymentId
+      paymentId: paymentId,
+      data: {
+        amount: parseFloat(amount),
+        gigId: gigId,
+        paypalOrderId: order.result.id
+      }
     });
 
   } catch (error) {
@@ -260,38 +260,42 @@ app.post('/api/create-payment', validateFirebaseToken, async (req, res) => {
       }
     }
 
+    // Send error response with detailed message
     res.status(500).json({
       status: 'error',
       success: false,
-      message: error.message
+      message: error.message,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 });
 
-// Updated capture-payment endpoint
+// Update the capture endpoint to match the schema
 app.post('/api/capture-payment', validateFirebaseToken, async (req, res) => {
   try {
     const { orderID, paymentId } = req.body;
     
-    // Execute PayPal capture
     const request = new paypal.orders.OrdersCaptureRequest(orderID);
     const capture = await paypalClient.execute(request);
 
     if (capture.result.status === 'COMPLETED') {
-      // Update payment document
+      const now = admin.firestore.FieldValue.serverTimestamp();
+      
       await db.collection('payments').doc(paymentId).update({
         status: 'COMPLETED',
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        captureDetails: {
-          captureId: capture.result.purchase_units[0].payments.captures[0].id,
-          captureTime: admin.firestore.FieldValue.serverTimestamp()
-        }
+        updatedAt: now,
+        capturedAt: now,
+        completedAt: now
       });
 
       res.json({
         success: true,
         status: 'COMPLETED',
-        paymentId: paymentId
+        paymentId: paymentId,
+        data: {
+          captureId: capture.result.purchase_units[0].payments.captures[0].id,
+          status: 'COMPLETED'
+        }
       });
     } else {
       throw new Error(`Payment capture failed: ${capture.result.status}`);
@@ -300,7 +304,6 @@ app.post('/api/capture-payment', validateFirebaseToken, async (req, res) => {
   } catch (error) {
     console.error('Payment capture error:', error);
     
-    // Update payment status to FAILED
     if (req.body.paymentId) {
       try {
         await db.collection('payments').doc(req.body.paymentId).update({
