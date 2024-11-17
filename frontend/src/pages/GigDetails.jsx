@@ -46,9 +46,12 @@ const GigDetails = () => {
   const [paypalLoaded, setPaypalLoaded] = useState(false);
   const [sendingMessage, setSendingMessage] = useState(false);
   const [processingPayment, setProcessingPayment] = useState(false);
- const [paypalScriptLoaded, setPaypalScriptLoaded] = useState(false);
+  const [paypalScriptLoaded, setPaypalScriptLoaded] = useState(false);
   const [paypalError, setPaypalError] = useState('');
-
+  const paymentTimeoutRef = useRef(null);
+  const processingRef = useRef(false);
+  
+const PAYMENT_TIMEOUT = 30000;
 const getApiBaseUrl = () => {
   const hostname = window.location.hostname;
   if (hostname === 'localhost') {
@@ -167,13 +170,22 @@ const getApiBaseUrl = () => {
       script.id = 'paypal-sdk';
       script.src = 'https://www.paypal.com/sdk/js?client-id=Ael-tHA9_mkr9yKohQV7M3O_LUq7ZfHAAA002cENIRptQc15oNItGBYhkXV0JHFoiTIeRz6F6apyUec2';
       script.async = true;
+        // Add loading timeout
+      const timeoutId = setTimeout(() => {
+        if (!paypalScriptLoaded) {
+          setPaypalError('PayPal is taking too long to load. Please refresh the page.');
+          script.remove();
+        }
+      }, 10000);
 
-      script.onload = () => {
+       script.onload = () => {
+        clearTimeout(timeoutId);
         setPaypalScriptLoaded(true);
         setPaypalError('');
       };
 
       script.onerror = () => {
+        clearTimeout(timeoutId);
         setPaypalError('Failed to load PayPal SDK');
         setPaypalScriptLoaded(false);
       };
@@ -192,6 +204,34 @@ const getApiBaseUrl = () => {
     };
   }, []);
 
+  // Reset processing state if component unmounts during processing
+  useEffect(() => {
+    return () => {
+      if (paymentTimeoutRef.current) {
+        clearTimeout(paymentTimeoutRef.current);
+      }
+      if (processingRef.current) {
+        const db = getFirestore();
+        const paymentRef = doc(db, 'payments', processingRef.current);
+        updateDoc(paymentRef, {
+          status: 'CANCELLED',
+          error: 'Payment process interrupted',
+          updatedAt: serverTimestamp()
+        }).catch(console.error);
+      }
+    };
+  }, []);
+
+  const resetPaymentState = () => {
+    setProcessingPayment(false);
+    processingRef.current = false;
+    if (paymentTimeoutRef.current) {
+      clearTimeout(paymentTimeoutRef.current);
+      paymentTimeoutRef.current = null;
+    }
+  };
+
+
  const handleBuyNow = async () => {
     if (!currentUser) {
       setError('Please log in to purchase this gig');
@@ -203,11 +243,25 @@ const getApiBaseUrl = () => {
       return;
     }
 
+    // Prevent multiple clicks
+    if (processingRef.current) {
+      return;
+    }
+
     let paymentDocRef = null;
 
     try {
       setProcessingPayment(true);
+      processingRef.current = true;
       setError('');
+
+      // Set timeout for entire payment process
+      paymentTimeoutRef.current = setTimeout(() => {
+        if (processingRef.current) {
+          setError('Payment process timed out. Please try again.');
+          resetPaymentState();
+        }
+      }, PAYMENT_TIMEOUT);
 
       const token = await currentUser.getIdToken();
       const API_BASE_URL = getApiBaseUrl();
@@ -223,6 +277,8 @@ const getApiBaseUrl = () => {
         createdAt: serverTimestamp(),
         title: gig.title
       });
+
+      processingRef.current = paymentDocRef.id;
 
       const response = await fetch(`${API_BASE_URL}/api/create-payment`, {
         method: 'POST',
@@ -256,6 +312,13 @@ const getApiBaseUrl = () => {
         throw new Error('PayPal SDK not loaded');
       }
 
+      // Clear the container before rendering new buttons
+      const container = document.getElementById('paypal-button-container');
+      if (!container) {
+        throw new Error('PayPal button container not found');
+      }
+      container.innerHTML = '';
+
       // Initialize PayPal buttons
       const paypalButtons = window.paypal.Buttons({
         orderID: data.orderID,
@@ -280,6 +343,7 @@ const getApiBaseUrl = () => {
             const captureData = await captureResponse.json();
             
             if (captureData.status === 'COMPLETED') {
+              resetPaymentState();
               toast({
                 title: "Payment Successful",
                 description: "Your payment has been processed successfully.",
@@ -290,6 +354,7 @@ const getApiBaseUrl = () => {
             }
           } catch (err) {
             console.error('Payment capture error:', err);
+            resetPaymentState();
             toast({
               variant: "destructive",
               title: "Payment Failed",
@@ -297,8 +362,16 @@ const getApiBaseUrl = () => {
             });
           }
         },
+        onCancel: () => {
+          resetPaymentState();
+          toast({
+            title: "Payment Cancelled",
+            description: "You've cancelled the payment process.",
+          });
+        },
         onError: (err) => {
           console.error('PayPal button error:', err);
+          resetPaymentState();
           toast({
             variant: "destructive",
             title: "Payment Error",
@@ -307,12 +380,6 @@ const getApiBaseUrl = () => {
         }
       });
 
-      const container = document.getElementById('paypal-button-container');
-      if (!container) {
-        throw new Error('PayPal button container not found');
-      }
-      
-      container.innerHTML = '';
       await paypalButtons.render('#paypal-button-container');
 
     } catch (err) {
@@ -335,34 +402,47 @@ const getApiBaseUrl = () => {
         }
       }
 
+      resetPaymentState();
       toast({
         variant: "destructive",
         title: "Payment Error",
         description: err.message || 'Failed to process payment',
       });
-    } finally {
-      setProcessingPayment(false);
     }
   };
 
-  // Modify the price card section in the return statement to show PayPal loading state
   const renderPayPalSection = () => {
     if (paypalError) {
       return (
         <Alert variant="destructive" className="mt-4">
           <AlertCircle className="h-4 w-4" />
-          <AlertDescription>{paypalError}</AlertDescription>
+          <AlertDescription>
+            {paypalError}
+            <Button
+              variant="outline"
+              size="sm"
+              className="ml-4"
+              onClick={() => window.location.reload()}
+            >
+              Refresh Page
+            </Button>
+          </AlertDescription>
         </Alert>
       );
     }
 
     if (!paypalScriptLoaded) {
-      return <div className="text-center mt-4">Loading PayPal...</div>;
+      return (
+        <div className="text-center mt-4">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 mx-auto"></div>
+          <p className="mt-2">Loading PayPal...</p>
+        </div>
+      );
     }
 
     return <div id="paypal-button-container" className="mt-4"></div>;
   };
-  
+
   if (loading) return <div className="text-center mt-8">Loading...</div>;
   if (error) return (
     <Alert variant="destructive" className="max-w-2xl mx-auto mt-8">
@@ -424,7 +504,7 @@ const getApiBaseUrl = () => {
         {/* Sidebar */}
         <div className="space-y-6">
           {/* Price Card */}
-           <Card>
+          <Card>
       <CardContent className="pt-6">
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center">
@@ -436,7 +516,14 @@ const getApiBaseUrl = () => {
             className="w-32"
             disabled={processingPayment || !paypalScriptLoaded}
           >
-            {processingPayment ? 'Processing...' : 'Buy Now'}
+            {processingPayment ? (
+              <div className="flex items-center">
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                Processing...
+              </div>
+            ) : (
+              'Buy Now'
+            )}
           </Button>
         </div>
         {renderPayPalSection()}
