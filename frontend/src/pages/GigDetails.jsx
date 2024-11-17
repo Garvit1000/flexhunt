@@ -232,7 +232,7 @@ const getApiBaseUrl = () => {
   };
 
 
- const handleBuyNow = async () => {
+   const handleBuyNow = async () => {
     if (!currentUser) {
       setError('Please log in to purchase this gig');
       return;
@@ -243,30 +243,19 @@ const getApiBaseUrl = () => {
       return;
     }
 
-    // Prevent multiple clicks
     if (processingRef.current) {
       return;
     }
 
     let paymentDocRef = null;
+    let paypalButtons = null;
 
     try {
       setProcessingPayment(true);
       processingRef.current = true;
       setError('');
 
-      
-      paymentTimeoutRef.current = setTimeout(() => {
-        if (processingRef.current) {
-          setError('Payment process timed out. Please try again.');
-          resetPaymentState();
-        }
-      }, PAYMENT_TIMEOUT);
-
-      const token = await currentUser.getIdToken();
-      const API_BASE_URL = getApiBaseUrl();
-      
-      // Create payment in Firebase
+      // Create payment document first
       const db = getFirestore();
       paymentDocRef = await addDoc(collection(db, 'payments'), {
         gigId: id,
@@ -280,6 +269,11 @@ const getApiBaseUrl = () => {
 
       processingRef.current = paymentDocRef.id;
 
+      // Get fresh token
+      const token = await currentUser.getIdToken(true);
+      const API_BASE_URL = getApiBaseUrl();
+
+      // Create PayPal order
       const response = await fetch(`${API_BASE_URL}/api/create-payment`, {
         method: 'POST',
         headers: {
@@ -307,23 +301,43 @@ const getApiBaseUrl = () => {
         throw new Error('Invalid response from server');
       }
 
-      // Make sure PayPal is available
       if (!window.paypal) {
         throw new Error('PayPal SDK not loaded');
       }
 
-      // Clear the container before rendering new buttons
       const container = document.getElementById('paypal-button-container');
       if (!container) {
         throw new Error('PayPal button container not found');
       }
       container.innerHTML = '';
 
+      // Set timeout only for PayPal button interaction
+      paymentTimeoutRef.current = setTimeout(() => {
+        if (processingRef.current) {
+          if (paypalButtons) {
+            paypalButtons.close();
+          }
+          updateDoc(paymentDocRef, {
+            status: 'TIMEOUT',
+            error: 'Payment process timed out',
+            updatedAt: serverTimestamp()
+          }).catch(console.error);
+          
+          setError('Payment process timed out. Please try again.');
+          resetPaymentState();
+        }
+      }, PAYMENT_TIMEOUT);
+
       // Initialize PayPal buttons
-      const paypalButtons = window.paypal.Buttons({
+      paypalButtons = window.paypal.Buttons({
         orderID: data.orderID,
         onApprove: async (paypalData) => {
           try {
+            // Clear timeout as soon as user approves
+            if (paymentTimeoutRef.current) {
+              clearTimeout(paymentTimeoutRef.current);
+            }
+
             const captureResponse = await fetch(`${API_BASE_URL}/api/capture-payment`, {
               method: 'POST',
               headers: {
@@ -355,6 +369,16 @@ const getApiBaseUrl = () => {
           } catch (err) {
             console.error('Payment capture error:', err);
             resetPaymentState();
+            
+            // Update payment document with error
+            if (paymentDocRef) {
+              updateDoc(paymentDocRef, {
+                status: 'FAILED',
+                error: err.message,
+                updatedAt: serverTimestamp()
+              }).catch(console.error);
+            }
+
             toast({
               variant: "destructive",
               title: "Payment Failed",
@@ -363,6 +387,18 @@ const getApiBaseUrl = () => {
           }
         },
         onCancel: () => {
+          if (paymentTimeoutRef.current) {
+            clearTimeout(paymentTimeoutRef.current);
+          }
+          
+          // Update payment document as cancelled
+          if (paymentDocRef) {
+            updateDoc(paymentDocRef, {
+              status: 'CANCELLED',
+              updatedAt: serverTimestamp()
+            }).catch(console.error);
+          }
+
           resetPaymentState();
           toast({
             title: "Payment Cancelled",
@@ -371,6 +407,20 @@ const getApiBaseUrl = () => {
         },
         onError: (err) => {
           console.error('PayPal button error:', err);
+          
+          if (paymentTimeoutRef.current) {
+            clearTimeout(paymentTimeoutRef.current);
+          }
+
+          // Update payment document with error
+          if (paymentDocRef) {
+            updateDoc(paymentDocRef, {
+              status: 'FAILED',
+              error: err.message || 'PayPal error occurred',
+              updatedAt: serverTimestamp()
+            }).catch(console.error);
+          }
+
           resetPaymentState();
           toast({
             variant: "destructive",
@@ -386,7 +436,6 @@ const getApiBaseUrl = () => {
       console.error('Payment processing error:', err);
       setError(err.message || 'Failed to process payment');
       
-      // Update failed payment document
       if (paymentDocRef) {
         try {
           await updateDoc(paymentDocRef, {
@@ -395,7 +444,8 @@ const getApiBaseUrl = () => {
             errorDetails: {
               timestamp: new Date().toISOString(),
               message: err.message
-            }
+            },
+            updatedAt: serverTimestamp()
           });
         } catch (updateErr) {
           console.error('Failed to update payment status:', updateErr);
