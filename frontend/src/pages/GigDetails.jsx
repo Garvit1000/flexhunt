@@ -53,7 +53,7 @@ const getApiBaseUrl = () => {
     return 'http://localhost:5000';
   }
   // Always use the same domain as the current request
-  return window.location.origin;
+  return 'https://flexhunt.onrender.com';
 };
 
   useEffect(() => {
