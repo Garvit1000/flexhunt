@@ -255,13 +255,13 @@ const getApiBaseUrl = () => {
       processingRef.current = true;
       setError('');
 
-      // Set timeout for entire payment process
-      // paymentTimeoutRef.current = setTimeout(() => {
-      //   if (processingRef.current) {
-      //     setError('Payment process timed out. Please try again.');
-      //     resetPaymentState();
-      //   }
-      // }, PAYMENT_TIMEOUT);
+      
+      paymentTimeoutRef.current = setTimeout(() => {
+        if (processingRef.current) {
+          setError('Payment process timed out. Please try again.');
+          resetPaymentState();
+        }
+      }, PAYMENT_TIMEOUT);
 
       const token = await currentUser.getIdToken();
       const API_BASE_URL = getApiBaseUrl();
