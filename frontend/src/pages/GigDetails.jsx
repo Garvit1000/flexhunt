@@ -46,6 +46,8 @@ const GigDetails = () => {
   const [paypalLoaded, setPaypalLoaded] = useState(false);
   const [sendingMessage, setSendingMessage] = useState(false);
   const [processingPayment, setProcessingPayment] = useState(false);
+ const [paypalScriptLoaded, setPaypalScriptLoaded] = useState(false);
+  const [paypalError, setPaypalError] = useState('');
 
 const getApiBaseUrl = () => {
   const hostname = window.location.hostname;
@@ -153,149 +155,214 @@ const getApiBaseUrl = () => {
       setSendingMessage(false);
     }
   };
+    useEffect(() => {
+    const loadPayPalScript = () => {
+      // Remove any existing PayPal script to avoid duplicates
+      const existingScript = document.getElementById('paypal-sdk');
+      if (existingScript) {
+        existingScript.remove();
+      }
 
-const handleBuyNow = async () => {
-  if (!currentUser) {
-    setError('Please log in to purchase this gig');
-    return;
-  }
+      const script = document.createElement('script');
+      script.id = 'paypal-sdk';
+      script.src = 'https://www.paypal.com/sdk/js?client-id=Ael-tHA9_mkr9yKohQV7M3O_LUq7ZfHAAA002cENIRptQc15oNItGBYhkXV0JHFoiTIeRz6F6apyUec2';
+      script.async = true;
 
-  let paymentDocRef = null;
+      script.onload = () => {
+        setPaypalScriptLoaded(true);
+        setPaypalError('');
+      };
 
-  try {
-    setProcessingPayment(true);
-    setError('');
+      script.onerror = () => {
+        setPaypalError('Failed to load PayPal SDK');
+        setPaypalScriptLoaded(false);
+      };
 
-    const token = await currentUser.getIdToken();
-    const API_BASE_URL = getApiBaseUrl();
-    
-    // Create payment in Firebase
-    const db = getFirestore();
-    paymentDocRef = await addDoc(collection(db, 'payments'), {
-      gigId: id,
-      buyerId: currentUser.uid,
-      sellerId: gig.providerId,
-      amount: gig.startingPrice,
-      status: 'PENDING',
-      createdAt: serverTimestamp(),
-      title: gig.title
-    });
+      document.body.appendChild(script);
+    };
 
-    const response = await fetch(`${API_BASE_URL}/api/create-payment`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
-      },
-      body: JSON.stringify({
+    loadPayPalScript();
+
+    // Cleanup
+    return () => {
+      const script = document.getElementById('paypal-sdk');
+      if (script) {
+        script.remove();
+      }
+    };
+  }, []);
+
+ const handleBuyNow = async () => {
+    if (!currentUser) {
+      setError('Please log in to purchase this gig');
+      return;
+    }
+
+    if (!paypalScriptLoaded) {
+      setError('PayPal is still loading. Please try again in a moment.');
+      return;
+    }
+
+    let paymentDocRef = null;
+
+    try {
+      setProcessingPayment(true);
+      setError('');
+
+      const token = await currentUser.getIdToken();
+      const API_BASE_URL = getApiBaseUrl();
+      
+      // Create payment in Firebase
+      const db = getFirestore();
+      paymentDocRef = await addDoc(collection(db, 'payments'), {
         gigId: id,
-        paymentId: paymentDocRef.id,
-        amount: gig.startingPrice,
-        title: gig.title,
         buyerId: currentUser.uid,
-        sellerId: gig.providerId
-      })
-    });
+        sellerId: gig.providerId,
+        amount: gig.startingPrice,
+        status: 'PENDING',
+        createdAt: serverTimestamp(),
+        title: gig.title
+      });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Server error: ${response.status} - ${errorText}`);
-    }
+      const response = await fetch(`${API_BASE_URL}/api/create-payment`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          gigId: id,
+          paymentId: paymentDocRef.id,
+          amount: gig.startingPrice,
+          title: gig.title,
+          buyerId: currentUser.uid,
+          sellerId: gig.providerId
+        })
+      });
 
-    const data = await response.json();
-    
-    if (!data || !data.orderID) {
-      throw new Error('Invalid response from server');
-    }
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Server error: ${response.status} - ${errorText}`);
+      }
 
-    // Initialize PayPal buttons
-    const paypalButtons = window.paypal.Buttons({
-      orderID: data.orderID,
-      onApprove: async (paypalData) => {
-        try {
-          const captureResponse = await fetch(`${API_BASE_URL}/api/capture-payment`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${token}`
-            },
-            body: JSON.stringify({
-              orderID: paypalData.orderID,
-              paymentId: paymentDocRef.id
-            })
-          });
+      const data = await response.json();
+      
+      if (!data || !data.orderID) {
+        throw new Error('Invalid response from server');
+      }
 
-          if (!captureResponse.ok) {
-            throw new Error(`Capture failed: ${captureResponse.status}`);
-          }
+      // Make sure PayPal is available
+      if (!window.paypal) {
+        throw new Error('PayPal SDK not loaded');
+      }
 
-          const captureData = await captureResponse.json();
-          
-          if (captureData.status === 'COMPLETED') {
-            toast({
-              title: "Payment Successful",
-              description: "Your payment has been processed successfully.",
+      // Initialize PayPal buttons
+      const paypalButtons = window.paypal.Buttons({
+        orderID: data.orderID,
+        onApprove: async (paypalData) => {
+          try {
+            const captureResponse = await fetch(`${API_BASE_URL}/api/capture-payment`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+              },
+              body: JSON.stringify({
+                orderID: paypalData.orderID,
+                paymentId: paymentDocRef.id
+              })
             });
-            navigate('/orders');
-          } else {
-            throw new Error(`Unexpected capture status: ${captureData.status}`);
+
+            if (!captureResponse.ok) {
+              throw new Error(`Capture failed: ${captureResponse.status}`);
+            }
+
+            const captureData = await captureResponse.json();
+            
+            if (captureData.status === 'COMPLETED') {
+              toast({
+                title: "Payment Successful",
+                description: "Your payment has been processed successfully.",
+              });
+              navigate('/orders');
+            } else {
+              throw new Error(`Unexpected capture status: ${captureData.status}`);
+            }
+          } catch (err) {
+            console.error('Payment capture error:', err);
+            toast({
+              variant: "destructive",
+              title: "Payment Failed",
+              description: err.message || 'Failed to complete payment',
+            });
           }
-        } catch (err) {
-          console.error('Payment capture error:', err);
+        },
+        onError: (err) => {
+          console.error('PayPal button error:', err);
           toast({
             variant: "destructive",
-            title: "Payment Failed",
-            description: err.message || 'Failed to complete payment',
+            title: "Payment Error",
+            description: "PayPal encountered an error. Please try again.",
           });
         }
-      },
-      onError: (err) => {
-        console.error('PayPal button error:', err);
-        toast({
-          variant: "destructive",
-          title: "Payment Error",
-          description: "PayPal encountered an error. Please try again.",
-        });
+      });
+
+      const container = document.getElementById('paypal-button-container');
+      if (!container) {
+        throw new Error('PayPal button container not found');
       }
-    });
+      
+      container.innerHTML = '';
+      await paypalButtons.render('#paypal-button-container');
 
-    const container = document.getElementById('paypal-button-container');
-    if (!container) {
-      throw new Error('PayPal button container not found');
-    }
-    
-    container.innerHTML = '';
-    await paypalButtons.render('#paypal-button-container');
-
-  } catch (err) {
-    console.error('Payment processing error:', err);
-    setError(err.message || 'Failed to process payment');
-    
-    // Update failed payment document
-    if (paymentDocRef) {
-      try {
-        await updateDoc(paymentDocRef, {
-          status: 'FAILED',
-          error: err.message,
-          errorDetails: {
-            timestamp: new Date().toISOString(),
-            message: err.message
-          }
-        });
-      } catch (updateErr) {
-        console.error('Failed to update payment status:', updateErr);
+    } catch (err) {
+      console.error('Payment processing error:', err);
+      setError(err.message || 'Failed to process payment');
+      
+      // Update failed payment document
+      if (paymentDocRef) {
+        try {
+          await updateDoc(paymentDocRef, {
+            status: 'FAILED',
+            error: err.message,
+            errorDetails: {
+              timestamp: new Date().toISOString(),
+              message: err.message
+            }
+          });
+        } catch (updateErr) {
+          console.error('Failed to update payment status:', updateErr);
+        }
       }
+
+      toast({
+        variant: "destructive",
+        title: "Payment Error",
+        description: err.message || 'Failed to process payment',
+      });
+    } finally {
+      setProcessingPayment(false);
+    }
+  };
+
+  // Modify the price card section in the return statement to show PayPal loading state
+  const renderPayPalSection = () => {
+    if (paypalError) {
+      return (
+        <Alert variant="destructive" className="mt-4">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>{paypalError}</AlertDescription>
+        </Alert>
+      );
     }
 
-    toast({
-      variant: "destructive",
-      title: "Payment Error",
-      description: err.message || 'Failed to process payment',
-    });
-  } finally {
-    setProcessingPayment(false);
-  }
-};
+    if (!paypalScriptLoaded) {
+      return <div className="text-center mt-4">Loading PayPal...</div>;
+    }
+
+    return <div id="paypal-button-container" className="mt-4"></div>;
+  };
+  
   if (loading) return <div className="text-center mt-8">Loading...</div>;
   if (error) return (
     <Alert variant="destructive" className="max-w-2xl mx-auto mt-8">
@@ -357,31 +424,31 @@ const handleBuyNow = async () => {
         {/* Sidebar */}
         <div className="space-y-6">
           {/* Price Card */}
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between mb-6">
-                <div className="flex items-center">
-                  <DollarSign className="h-6 w-6 text-gray-500" />
-                  <span className="text-2xl font-bold">{gig.startingPrice}</span>
-                </div>
-                <Button
-                  onClick={handleBuyNow}
-                  className="w-32"
-                  disabled={processingPayment}
-                >
-                  {processingPayment ? 'Processing...' : 'Buy Now'}
-                </Button>
-              </div>
-              <div id="paypal-button-container"></div>
-              <div className="text-sm text-gray-500 mt-4">
-                ✓ {gig.deliveryTime} delivery
-                <br />
-                ✓ Direct communication
-                <br />
-                ✓ Money-back guarantee
-              </div>
-            </CardContent>
-          </Card>
+           <Card>
+      <CardContent className="pt-6">
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center">
+            <DollarSign className="h-6 w-6 text-gray-500" />
+            <span className="text-2xl font-bold">{gig.startingPrice}</span>
+          </div>
+          <Button
+            onClick={handleBuyNow}
+            className="w-32"
+            disabled={processingPayment || !paypalScriptLoaded}
+          >
+            {processingPayment ? 'Processing...' : 'Buy Now'}
+          </Button>
+        </div>
+        {renderPayPalSection()}
+        <div className="text-sm text-gray-500 mt-4">
+          ✓ {gig.deliveryTime} delivery
+          <br />
+          ✓ Direct communication
+          <br />
+          ✓ Money-back guarantee
+        </div>
+      </CardContent>
+    </Card>
 
           {/* Chat Card */}
           <Card>
