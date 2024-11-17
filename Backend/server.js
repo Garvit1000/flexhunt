@@ -210,14 +210,13 @@ app.post('/api/create-payment', validateFirebaseToken, async (req, res) => {
     if (!order?.result?.id) {
       throw new Error('Invalid PayPal order response');
     }
-    console.log('PayPal order created:', order.result.id);
 
     // Calculate escrow release date
     const escrowReleaseDate = new Date();
     escrowReleaseDate.setDate(escrowReleaseDate.getDate() + 7);
 
-    // Prepare payment data
-    const paymentData = {
+    // Update payment document
+    await db.collection('payments').doc(paymentId).update({
       amount: parseFloat(amount),
       buyerId: req.user.uid,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -228,35 +227,21 @@ app.post('/api/create-payment', validateFirebaseToken, async (req, res) => {
       sellerId: gigDoc.data().providerId,
       status: 'PENDING',
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    };
+    });
 
-    console.log('Updating payment document:', paymentId);
-    await db.collection('payments').doc(paymentId).update(paymentData);
-
-    // Construct response object
-    const responseData = {
+    // Send response with required content-type header
+    res.setHeader('Content-Type', 'application/json');
+    return res.status(200).json({
       status: 'success',
       success: true,
       orderID: order.result.id,
       paymentId: paymentId
-    };
-
-    // Set proper headers
-    res.setHeader('Content-Type', 'application/json');
-    
-    // Log response before sending
-    console.log('Sending response:', responseData);
-    
-    // Send response
-    return res.status(200).json(responseData);
+    });
 
   } catch (error) {
-    console.error('Payment creation error:', {
-      error: error,
-      message: error.message,
-      stack: error.stack
-    });
+    console.error('Payment creation error:', error);
     
+    // Update payment status to failed if we have a paymentId
     if (req.body.paymentId) {
       try {
         await db.collection('payments').doc(req.body.paymentId).update({
@@ -269,19 +254,13 @@ app.post('/api/create-payment', validateFirebaseToken, async (req, res) => {
       }
     }
 
-    // Ensure error response is properly formatted
-    const errorResponse = {
+    // Send error response with content-type header
+    res.setHeader('Content-Type', 'application/json');
+    return res.status(500).json({
       status: 'error',
       success: false,
-      message: error.message,
-      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    };
-
-    // Set proper headers
-    res.setHeader('Content-Type', 'application/json');
-    
-    // Send error response
-    return res.status(500).json(errorResponse);
+      message: error.message
+    });
   }
 });
 
