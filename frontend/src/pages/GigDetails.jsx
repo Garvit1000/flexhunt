@@ -376,14 +376,32 @@ const getApiBaseUrl = () => {
             const captureData = await captureResponse.json();
             
             if (captureData.status === 'COMPLETED') {
-              toast({
-                title: "Payment Successful",
-                description: "Your payment has been processed successfully.",
-              });
-              navigate('/orders');
-            } else {
-              throw new Error(`Unexpected capture status: ${captureData.status}`);
-            }
+               await addDoc(collection(db, 'orders'), {
+    gigId: id,
+    gigTitle: gig.title,
+    buyerId: currentUser.uid,
+    buyerEmail: currentUser.email,
+    buyerName: currentUser.displayName || 'Anonymous',
+    sellerId: gig.providerId,
+    sellerEmail: gig.providerEmail || '',
+    sellerName: gig.provider || 'Unknown Provider',
+    paymentId: paymentDocRef.id,
+    status: 'PENDING',
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    amount: Number(gig.startingPrice),
+    deliveryTime: gig.deliveryTime || '7 days',
+    category: gig.category || 'uncategorized'
+  });
+
+  toast({
+    title: "Payment Successful",
+    description: "Your payment has been processed successfully.",
+  });
+  navigate('/orders');
+} else {
+  throw new Error(`Unexpected capture status: ${captureData.status}`);
+}
           } catch (err) {
             console.error('Payment capture error:', err);
             
