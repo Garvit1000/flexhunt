@@ -48,10 +48,12 @@ const GigDetails = () => {
   const [processingPayment, setProcessingPayment] = useState(false);
   const [paypalScriptLoaded, setPaypalScriptLoaded] = useState(false);
   const [paypalError, setPaypalError] = useState('');
+  const [timeoutCountdown, setTimeoutCountdown] = useState(null);
+  const countdownIntervalRef = useRef(null);
   const paymentTimeoutRef = useRef(null);
   const processingRef = useRef(false);
   
-const PAYMENT_TIMEOUT = 30000;
+const PAYMENT_TIMEOUT = 300000;
 const getApiBaseUrl = () => {
   const hostname = window.location.hostname;
   if (hostname === 'localhost') {
@@ -222,17 +224,22 @@ const getApiBaseUrl = () => {
     };
   }, []);
 
-  const resetPaymentState = () => {
+   const resetPaymentState = () => {
     setProcessingPayment(false);
     processingRef.current = false;
+    setTimeoutCountdown(null);
     if (paymentTimeoutRef.current) {
       clearTimeout(paymentTimeoutRef.current);
       paymentTimeoutRef.current = null;
     }
+    if (countdownIntervalRef.current) {
+      clearInterval(countdownIntervalRef.current);
+      countdownIntervalRef.current = null;
+    }
   };
 
 
-   const handleBuyNow = async () => {
+    const handleBuyNow = async () => {
     if (!currentUser) {
       setError('Please log in to purchase this gig');
       return;
@@ -311,7 +318,21 @@ const getApiBaseUrl = () => {
       }
       container.innerHTML = '';
 
-      // Set timeout only for PayPal button interaction
+      // Start countdown timer
+      const startTime = Date.now();
+      const updateCountdown = () => {
+        const elapsed = Date.now() - startTime;
+        const remaining = Math.max(0, Math.ceil((PAYMENT_TIMEOUT - elapsed) / 1000));
+        setTimeoutCountdown(remaining);
+        if (remaining === 0 && countdownIntervalRef.current) {
+          clearInterval(countdownIntervalRef.current);
+        }
+      };
+      
+      countdownIntervalRef.current = setInterval(updateCountdown, 1000);
+      updateCountdown();
+
+      // Set timeout for PayPal button interaction
       paymentTimeoutRef.current = setTimeout(() => {
         if (processingRef.current) {
           if (paypalButtons) {
@@ -333,10 +354,8 @@ const getApiBaseUrl = () => {
         orderID: data.orderID,
         onApprove: async (paypalData) => {
           try {
-            // Clear timeout as soon as user approves
-            if (paymentTimeoutRef.current) {
-              clearTimeout(paymentTimeoutRef.current);
-            }
+            // Clear timeout and countdown
+            resetPaymentState();
 
             const captureResponse = await fetch(`${API_BASE_URL}/api/capture-payment`, {
               method: 'POST',
@@ -357,7 +376,6 @@ const getApiBaseUrl = () => {
             const captureData = await captureResponse.json();
             
             if (captureData.status === 'COMPLETED') {
-              resetPaymentState();
               toast({
                 title: "Payment Successful",
                 description: "Your payment has been processed successfully.",
@@ -368,7 +386,6 @@ const getApiBaseUrl = () => {
             }
           } catch (err) {
             console.error('Payment capture error:', err);
-            resetPaymentState();
             
             // Update payment document with error
             if (paymentDocRef) {
@@ -387,9 +404,7 @@ const getApiBaseUrl = () => {
           }
         },
         onCancel: () => {
-          if (paymentTimeoutRef.current) {
-            clearTimeout(paymentTimeoutRef.current);
-          }
+          resetPaymentState();
           
           // Update payment document as cancelled
           if (paymentDocRef) {
@@ -399,7 +414,6 @@ const getApiBaseUrl = () => {
             }).catch(console.error);
           }
 
-          resetPaymentState();
           toast({
             title: "Payment Cancelled",
             description: "You've cancelled the payment process.",
@@ -408,9 +422,7 @@ const getApiBaseUrl = () => {
         onError: (err) => {
           console.error('PayPal button error:', err);
           
-          if (paymentTimeoutRef.current) {
-            clearTimeout(paymentTimeoutRef.current);
-          }
+          resetPaymentState();
 
           // Update payment document with error
           if (paymentDocRef) {
@@ -421,7 +433,6 @@ const getApiBaseUrl = () => {
             }).catch(console.error);
           }
 
-          resetPaymentState();
           toast({
             variant: "destructive",
             title: "Payment Error",
@@ -461,7 +472,7 @@ const getApiBaseUrl = () => {
     }
   };
 
-  const renderPayPalSection = () => {
+   const renderPayPalSection = () => {
     if (paypalError) {
       return (
         <Alert variant="destructive" className="mt-4">
@@ -481,16 +492,23 @@ const getApiBaseUrl = () => {
       );
     }
 
-    if (!paypalScriptLoaded) {
-      return (
-        <div className="text-center mt-4">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 mx-auto"></div>
-          <p className="mt-2">Loading PayPal...</p>
-        </div>
-      );
-    }
-
-    return <div id="paypal-button-container" className="mt-4"></div>;
+   return (
+      <div className="mt-4">
+        {timeoutCountdown !== null && (
+          <div className="text-sm text-gray-500 mb-2 text-center">
+            Time remaining: {Math.floor(timeoutCountdown / 60)}:{(timeoutCountdown % 60).toString().padStart(2, '0')}
+          </div>
+        )}
+        {!paypalScriptLoaded ? (
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 mx-auto"></div>
+            <p className="mt-2">Loading PayPal...</p>
+          </div>
+        ) : (
+          <div id="paypal-button-container"></div>
+        )}
+      </div>
+    );
   };
 
   if (loading) return <div className="text-center mt-8">Loading...</div>;
