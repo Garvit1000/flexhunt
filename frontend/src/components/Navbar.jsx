@@ -5,12 +5,14 @@ import { logout } from '../firebase';
 import { Link, useNavigate } from 'react-router-dom';
 
 const navigationItems = [
-  { name: 'Home', href: '#home', current: true },
-  { name: 'Jobs', href: '#jobs', current: false },
-  { name: 'Internships', href: '#internships', current: false },
-  { name: 'Freelance', href: '#freelance', current: false },
-  { name: 'Community', href: '#community', current: false, icon: Users }
+  { name: 'Home', href: '/', current: true },
+  { name: 'Jobs', href: '/job-page', current: false },
+  { name: 'Internships', href: '/internship-page', current: false },
+  { name: 'Freelance', href: '/gigs', current: false },
+  { name: 'Assessments', href: '/assessment/question-bank', current: false },
+  { name: 'Community', href: 'https://flex-community.vercel.app/', current: false, icon: Users }
 ];
+
 const PhotoAvatar = ({ user, size = 'h-8 w-8' }) => {
   const [imgSrc, setImgSrc] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -126,34 +128,57 @@ const ProfileDropdown = ({ userRole, currentUser, onLogout }) => {
     }
   };
 
+  const recruiterLinks = [
+    { name: 'Profile', href: '/profile' },
+    { name: 'Post a Job', href: '/postjob' },
+    { name: 'View Applications', href: '/applications' },
+    { name: 'Resume Builder', href: '/resume-builder' },
+    { name: 'View Internship Applications', href: '/internship-applications' },
+    { name: 'Post Internship', href: '/post-internship' },
+    { name: 'Become a Freelancer', href: '/seller-info' },
+    { name: 'Orders', href: '/orders' },
+    { name: 'Question Bank', href: '/assessment/question-bank' },
+    { name: 'Create Assessment', href: '/assessment/create' },
+    { name: 'My Assessments', href: '/assessments' },
+    { name: 'Assign Assessments', href: '/assessment/assign' }
+  ];
+
+  const candidateLinks = [
+    { name: 'Profile', href: '/profile' },
+    { name: 'My Applications', href: '/applicants/:id' },
+    { name: 'Saved Jobs', href: '/saved-jobs' },
+    { name: 'Saved Internships', href: '/saved-internships' },
+    { name: 'Create New Gig', href: '/create-gig' },
+    { name: 'Resume Builder', href: '/resume-builder' },
+    { name: 'My Internship Applications', href: '/internship-tracking' },
+    { name: 'Become a Freelancer', href: '/seller-info' },
+    { name: 'Orders', href: '/orders' },
+    { name: 'My Assessments', href: '/assessments' }
+  ];
+
   const roleSpecificItems = () => {
     const commonClasses = "block w-full px-4 py-3 text-sm text-gray-700 hover:bg-gray-100 active:bg-gray-200 transition-colors duration-200";
 
     if (userRole === 'jobseeker') {
       return (
         <>
-          <Link to="/profile" className={commonClasses}>Profile</Link>
-          <Link to="/applicants/:id" className={commonClasses}>My Applications</Link>
-          <Link to="/saved-jobs" className={commonClasses}>Saved Jobs</Link>
-          <Link to="/saved-internships" className={commonClasses}>Saved Internships</Link>
-          <Link to="/create-gig" className={commonClasses}>Create New Gig</Link>
-          <Link to="/resume-builder" className={commonClasses}>Resume Builder</Link>
-          <Link to="/internship-tracking" className={commonClasses}>My Internship Applications</Link>
-          <Link to="/seller-info" className={commonClasses}>Become a Freelancer</Link>
-          <Link to="/orders" className={commonClasses}>Orders</Link>
+          {candidateLinks.map((link) => (
+            <Link to={link.href} key={link.name} className={commonClasses}>
+              {link.icon && <link.icon className="inline-block w-4 h-4 mr-2" />}
+              {link.name}
+            </Link>
+          ))}
         </>
       );
     } else if (userRole === 'recruiter') {
       return (
         <>
-          <Link to="/profile" className={commonClasses}>Profile</Link>
-          <Link to="/postjob" className={commonClasses}>Post a Job</Link>
-          <Link to="/applications" className={commonClasses}>View Applications</Link>
-          <Link to="/resume-builder" className={commonClasses}>Resume Builder</Link>
-          <Link to="/internship-applications" className={commonClasses}>View Internship Applications</Link>
-          <Link to="/post-internship" className={commonClasses}>Post Internship</Link>
-          <Link to="/seller-info" className={commonClasses}>Become a Freelancer</Link>
-          <Link to="/orders" className={commonClasses}>Orders</Link>
+          {recruiterLinks.map((link) => (
+            <Link to={link.href} key={link.name} className={commonClasses}>
+              {link.icon && <link.icon className="inline-block w-4 h-4 mr-2" />}
+              {link.name}
+            </Link>
+          ))}
         </>
       );
     }
@@ -232,15 +257,15 @@ const ProfileDropdown = ({ userRole, currentUser, onLogout }) => {
 
 const Navbar = ({ onSignInClick }) => {
   const [isOpen, setIsOpen] = useState(false);
-  const { currentUser, loading } = useAuth();
+  const { currentUser } = useAuth();
   const [userRole, setUserRole] = useState(null);
+  const navigate = useNavigate();
   const [isScrolled, setIsScrolled] = useState(false);
 
   useEffect(() => {
     const handleScroll = () => {
       setIsScrolled(window.scrollY > 0);
     };
-
     window.addEventListener('scroll', handleScroll);
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
@@ -272,17 +297,6 @@ const Navbar = ({ onSignInClick }) => {
     setIsOpen(false);
   };
 
-  const scrollToSection = (sectionId) => {
-    setIsOpen(false);
-    const element = document.querySelector(sectionId);
-    if (element) {
-      element.scrollIntoView({
-        behavior: 'smooth',
-        block: 'start',
-      });
-    }
-  };
-
   return (
     <>
       <nav className={`fixed w-full top-0 z-50 transition-all duration-300 ${isScrolled ? 'bg-white shadow-lg' : 'bg-transparent'
@@ -304,28 +318,37 @@ const Navbar = ({ onSignInClick }) => {
               </div>
               <div className="hidden md:ml-6 md:flex md:space-x-8">
                 {navigationItems.map((item) => (
-                  <button
-                    key={item.name}
-                    onClick={() => scrollToSection(item.href)}
-                    className="inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium
-                      border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700
-                      transition-colors duration-200"
-                  >
-                    {item.icon && <item.icon className="w-4 h-4 mr-1" />}
-                    {item.name}
-                  </button>
+                  item.href.startsWith('http') ? (
+                    <a
+                      key={item.name}
+                      href={item.href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium
+                        border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700
+                        transition-colors duration-200"
+                    >
+                      {item.icon && <item.icon className="w-4 h-4 mr-1" />}
+                      {item.name}
+                    </a>
+                  ) : (
+                    <button
+                      key={item.name}
+                      onClick={() => navigate(item.href)}
+                      className="inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium
+                        border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700
+                        transition-colors duration-200"
+                    >
+                      {item.icon && <item.icon className="w-4 h-4 mr-1" />}
+                      {item.name}
+                    </button>
+                  )
                 ))}
               </div>
             </div>
 
             <div className="hidden md:ml-6 md:flex md:items-center">
-              {!loading && currentUser ? (
-                <ProfileDropdown
-                  userRole={userRole}
-                  currentUser={currentUser}
-                  onLogout={handleLogout}
-                />
-              ) : (
+              {!currentUser ? (
                 <button
                   onClick={onSignInClick}
                   className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium 
@@ -333,6 +356,12 @@ const Navbar = ({ onSignInClick }) => {
                 >
                   Sign In
                 </button>
+              ) : (
+                <ProfileDropdown
+                  userRole={userRole}
+                  currentUser={currentUser}
+                  onLogout={handleLogout}
+                />
               )}
             </div>
 
@@ -357,27 +386,35 @@ const Navbar = ({ onSignInClick }) => {
         <div className={`md:hidden transition-all duration-300 ease-in-out ${isOpen ? 'max-h-screen' : 'max-h-0 overflow-hidden'}`}>
           <div className="px-2 pt-2 pb-3 space-y-1 bg-white shadow-lg">
             {navigationItems.map((item) => (
-              <button
-                key={item.name}
-                onClick={() => scrollToSection(item.href)}
-                className="block w-full px-3 py-2 rounded-md text-base font-medium text-gray-700 
-                  hover:text-gray-900 hover:bg-gray-50 transition-colors duration-200"
-              >
-                <div className="flex items-center">
-                  {item.icon && <item.icon className="w-4 h-4 mr-2" />}
-                  {item.name}
-                </div>
-              </button>
+              item.href.startsWith('http') ? (
+                <a
+                  key={item.name}
+                  href={item.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block w-full px-3 py-2 rounded-md text-base font-medium text-gray-700 
+                    hover:text-gray-900 hover:bg-gray-50 transition-colors duration-200"
+                >
+                  <div className="flex items-center">
+                    {item.icon && <item.icon className="w-4 h-4 mr-2" />}
+                    {item.name}
+                  </div>
+                </a>
+              ) : (
+                <button
+                  key={item.name}
+                  onClick={() => navigate(item.href)}
+                  className="block w-full px-3 py-2 rounded-md text-base font-medium text-gray-700 
+                    hover:text-gray-900 hover:bg-gray-50 transition-colors duration-200"
+                >
+                  <div className="flex items-center">
+                    {item.icon && <item.icon className="w-4 h-4 mr-2" />}
+                    {item.name}
+                  </div>
+                </button>
+              )
             ))}
-            {!loading && currentUser ? (
-              <div className="pt-4 pb-3 border-t border-gray-200">
-                <ProfileDropdown
-                  userRole={userRole}
-                  currentUser={currentUser}
-                  onLogout={handleLogout}
-                />
-              </div>
-            ) : (
+            {!currentUser ? (
               <button
                 onClick={onSignInClick}
                 className="block w-full text-left px-3 py-2 rounded-md text-base font-medium 
@@ -385,6 +422,14 @@ const Navbar = ({ onSignInClick }) => {
               >
                 Sign In
               </button>
+            ) : (
+              <div className="pt-4 pb-3 border-t border-gray-200">
+                <ProfileDropdown
+                  userRole={userRole}
+                  currentUser={currentUser}
+                  onLogout={handleLogout}
+                />
+              </div>
             )}
           </div>
         </div>

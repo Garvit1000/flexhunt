@@ -4,8 +4,9 @@ import { getAuth } from 'firebase/auth';
 import { db } from '../firebase';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
-import { Check, X, Loader2, FileText, Users, Clock, Filter } from 'lucide-react';
+import { Check, X, Loader2, FileText, Users, Clock, Filter, BookOpen } from 'lucide-react';
 import { useAuth } from '../components/AuthContext';
+import { useNavigate } from 'react-router-dom';
 
 export default function ApplicationPage() {
   const [applications, setApplications] = useState([]);
@@ -13,6 +14,7 @@ export default function ApplicationPage() {
   const [updateLoading, setUpdateLoading] = useState({});
   const [filterStatus, setFilterStatus] = useState('all');
   const { currentUser, loading: authLoading } = useAuth();
+  const navigate = useNavigate();
 
   const getUserRole = () => {
     const userEmail = currentUser?.email;
@@ -258,6 +260,13 @@ export default function ApplicationPage() {
                               ) : (
                                 <X className="w-4 h-4" />
                               )}
+                            </button>
+                            <button
+                              onClick={() => navigate(`/assessment/assign?candidateId=${app.userId}`)}
+                              className="p-2 rounded-full bg-blue-500 text-white hover:bg-blue-600 transition-colors"
+                              title="Assign Assessment"
+                            >
+                              <BookOpen className="w-4 h-4" />
                             </button>
                           </div>
                         </td>

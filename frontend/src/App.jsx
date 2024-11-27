@@ -1,4 +1,4 @@
-import React,{useState} from 'react';
+import React, { useState, useEffect } from 'react';
 import { Route, Routes } from 'react-router-dom';
 import Navbar from './components/Navbar';
 import Footer from './components/Footer';
@@ -25,30 +25,53 @@ import Orders from './pages/Orders';
 import SellerOrders from './pages/SellerOrders';
 import SellerRegistration from './pages/SellerRegistration';
 import { AboutUs, ContactUs } from './pages/about';
+import QuestionBank from './components/assessment/QuestionBank';
+import CreateAssessment from './components/assessment/CreateAssessment';
+import TakeAssessment from './components/assessment/TakeAssessment';
+import AssessmentList from './components/assessment/AssessmentList';
+import AssignAssessment from './components/assessment/AssignAssessment';
+
 const App = () => {
   const [isSignInOpen, setIsSignInOpen] = useState(false);
-    const [userRole, setUserRole] = useState(null);
-    const openSignInPopup = () => setIsSignInOpen(true);
-    const closeSignInPopup = () => setIsSignInOpen(false);
-   
+  const [userRole, setUserRole] = useState(null);
+  const [isFullScreen, setIsFullScreen] = useState(false);
+
+  useEffect(() => {
+    const handleFullScreenChange = () => {
+      setIsFullScreen(!!document.fullscreenElement);
+    };
+
+    document.addEventListener('fullscreenchange', handleFullScreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullScreenChange);
+    document.addEventListener('mozfullscreenchange', handleFullScreenChange);
+    document.addEventListener('MSFullscreenChange', handleFullScreenChange);
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullScreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullScreenChange);
+      document.removeEventListener('mozfullscreenchange', handleFullScreenChange);
+      document.removeEventListener('MSFullscreenChange', handleFullScreenChange);
+    };
+  }, []);
+
+  const openSignInPopup = () => setIsSignInOpen(true);
+  const closeSignInPopup = () => setIsSignInOpen(false);
+
   return (
     <>
       <div className="App">
-      
         <AuthProvider>
-        <Navbar onSignInClick={openSignInPopup} />
-      
+          {!isFullScreen && <Navbar onSignInClick={openSignInPopup} />}
           {/* Sign-In Popup */}
-       {isSignInOpen && (
-        <SignInPopup
-          closeModal={closeSignInPopup}
-          setRole={(role) => {
-            setUserRole(role);
-            console.log('User role set:', role);
-          }}
-        />
-      )}
-          
+          {isSignInOpen && (
+            <SignInPopup
+              closeModal={closeSignInPopup}
+              setRole={(role) => {
+                setUserRole(role);
+                console.log('User role set:', role);
+              }}
+            />
+          )}
           {/* Define Routes for navigation */}
           <Routes>
             <Route path="/" element={<Home />} />
@@ -64,23 +87,25 @@ const App = () => {
             <Route path="/internship-page" element={<InternshipPage />} />
             <Route path="/internship-applications" element={<InternshipApplicationPage />} />
             <Route path="/internship-tracking" element={<InternshipTrackingPage />} />
-            <Route path="/saved-internships"element={<SavedInternshipsPage  />} />
+            <Route path="/saved-internships" element={<SavedInternshipsPage />} />
             <Route path="/gigs" element={<GigList />} />
             <Route path="/create-gig" element={<CreateGig />} />
             <Route path="/gig/:id" element={<GigDetails />} />
             <Route path="/orders" element={<Orders />} />
             <Route path="/seller-orders" element={<SellerOrders />} />
             <Route path='/seller-info' element={<SellerRegistration />} />
-            <Route path="/about" element={<AboutUs/>} />
-            <Route path="/contact-us" element={<ContactUs/>} />
-      
+            <Route path="/about" element={<AboutUs />} />
+            <Route path="/contact-us" element={<ContactUs />} />
+            {/* Assessment Routes */}
+            <Route path="/assessment/question-bank" element={<QuestionBank />} />
+            <Route path="/assessment/create" element={<CreateAssessment />} />
+            <Route path="/assessment/take/:assessmentId" element={<TakeAssessment />} />
+            <Route path="/assessments" element={<AssessmentList />} />
+            <Route path="/assessment/assign" element={<AssignAssessment />} />
           </Routes>
         </AuthProvider>
-        
       </div>
-      
-      {/* Footer remains constant across all routes */}
-      <Footer />
+      {!isFullScreen && <Footer />}
     </>
   );
 };
