@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { collection, getDocs, updateDoc, doc } from 'firebase/firestore';
+import { collection, getDocs, updateDoc, doc, query, where } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
 import { db } from '../firebase';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -15,24 +15,54 @@ export default function ApplicationPage() {
   const [filterStatus, setFilterStatus] = useState('all');
   const { currentUser, loading: authLoading } = useAuth();
   const navigate = useNavigate();
+  const [recruiterJobs, setRecruiterJobs] = useState([]);
 
   const getUserRole = () => {
     const userEmail = currentUser?.email;
     return userEmail ? localStorage.getItem(`role_${userEmail}`) : null;
   };
 
+  // Fetch recruiter's jobs first
+  const fetchRecruiterJobs = async () => {
+    try {
+      const jobsQuery = query(
+        collection(db, 'jobs'),
+        where('recruiterEmail', '==', currentUser.email)
+      );
+      const jobsSnapshot = await getDocs(jobsQuery);
+      const jobs = jobsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setRecruiterJobs(jobs);
+      return jobs;
+    } catch (error) {
+      console.error('Error fetching recruiter jobs:', error);
+      return [];
+    }
+  };
+
   useEffect(() => {
     if (currentUser && getUserRole() === 'recruiter') {
-      fetchApplications();
+      fetchRecruiterJobs().then(jobs => {
+        if (jobs.length > 0) {
+          fetchApplications(jobs);
+        } else {
+          setLoading(false);
+        }
+      });
     }
   }, [currentUser]);
 
-  const fetchApplications = async () => {
+  const fetchApplications = async (jobs) => {
     try {
-      const querySnapshot = await getDocs(collection(db, 'applications'));
-      const apps = querySnapshot.docs.map(doc => ({ 
-        id: doc.id, 
-        ...doc.data() 
+      const jobIds = jobs.map(job => job.id);
+      const applicationsQuery = query(
+        collection(db, 'applications'),
+        where('jobId', 'in', jobIds)
+      );
+      const querySnapshot = await getDocs(applicationsQuery);
+      const apps = querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        jobTitle: jobs.find(job => job.id === doc.data().jobId)?.title || 'Unknown Job'
       }));
       setApplications(apps);
     } catch (error) {
@@ -151,132 +181,139 @@ export default function ApplicationPage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          <StatusCard 
-            title="Total Applications" 
-            count={applications.length}
-            icon={Users}
-            className="bg-blue-100 text-blue-600"
-          />
-          <StatusCard 
-            title="Pending Review" 
-            count={applications.filter(app => !app.status || app.status === 'pending').length}
-            icon={Clock}
-            className="bg-yellow-100 text-yellow-600"
-          />
-          <StatusCard 
-            title="Processed" 
-            count={applications.filter(app => app.status === 'accepted' || app.status === 'rejected').length}
-            icon={FileText}
-            className="bg-green-100 text-green-600"
-          />
-        </div>
-
-        {loading ? (
-          <Card>
-            <CardContent className="flex items-center justify-center p-12">
-              <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
-            </CardContent>
-          </Card>
+        {recruiterJobs.length === 0 && !loading ? (
+          <Alert>
+            <AlertTitle>No Jobs Posted</AlertTitle>
+            <AlertDescription>
+              You haven't posted any jobs yet. Post a job to start receiving applications.
+            </AlertDescription>
+          </Alert>
         ) : (
-          <Card>
-            <CardContent className="p-6">
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className="border-b">
-                      <th className="text-left p-3 text-sm font-semibold text-gray-600">Candidate</th>
-                      <th className="text-left p-3 text-sm font-semibold text-gray-600">Contact</th>
-                      <th className="text-left p-3 text-sm font-semibold text-gray-600">Experience</th>
-                      <th className="text-left p-3 text-sm font-semibold text-gray-600">Skills</th>
-                      <th className="text-left p-3 text-sm font-semibold text-gray-600">Status</th>
-                      <th className="text-left p-3 text-sm font-semibold text-gray-600">Resume</th>
-                      <th className="text-right p-3 text-sm font-semibold text-gray-600">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {getFilteredApplications().map((app) => (
-                      <tr key={app.id} className="border-b hover:bg-gray-50">
-                        <td className="p-3">
-                          <div>
-                            <p className="font-medium text-gray-900">{app.name}</p>
-                            <p className="text-sm text-gray-500">{app.education}</p>
-                          </div>
-                        </td>
-                        <td className="p-3">
-                          <div>
-                            <p className="text-sm">{app.email}</p>
-                            <p className="text-sm text-gray-500">{app.phone}</p>
-                          </div>
-                        </td>
-                        <td className="p-3 text-sm">{app.experience}</td>
-                        <td className="p-3">
-                          <div className="flex flex-wrap gap-1">
-                            {app.skills.split(',').map((skill, index) => (
-                              <span key={index} className="px-2 py-1 bg-gray-100 rounded-full text-xs">
-                                {skill.trim()}
-                              </span>
-                            ))}
-                          </div>
-                        </td>
-                        <td className="p-3">
-                          <span className={getStatusBadge(app.status)}>
-                            {app.status || 'pending'}
-                          </span>
-                        </td>
-                        <td className="p-3">
-                          <a
-                            href={app.resumeURL}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-blue-600 hover:text-blue-800 inline-flex items-center gap-1 text-sm"
-                          >
-                            <FileText className="w-4 h-4" />
-                            View
-                          </a>
-                        </td>
-                        <td className="p-3">
-                          <div className="flex justify-end space-x-2">
-                            <button
-                              onClick={() => handleStatusUpdate(app.id, 'accepted')}
-                              disabled={updateLoading[app.id] || app.status === 'accepted'}
-                              className="p-2 rounded-full bg-green-500 text-white hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                              title="Accept application"
-                            >
-                              {updateLoading[app.id] ? (
-                                <Loader2 className="w-4 h-4 animate-spin" />
-                              ) : (
-                                <Check className="w-4 h-4" />
-                              )}
-                            </button>
-                            <button
-                              onClick={() => handleStatusUpdate(app.id, 'rejected')}
-                              disabled={updateLoading[app.id] || app.status === 'rejected'}
-                              className="p-2 rounded-full bg-red-500 text-white hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                              title="Reject application"
-                            >
-                              {updateLoading[app.id] ? (
-                                <Loader2 className="w-4 h-4 animate-spin" />
-                              ) : (
-                                <X className="w-4 h-4" />
-                              )}
-                            </button>
-                            <button
-                              onClick={() => navigate(`/assessment/assign?candidateId=${app.userId}`)}
-                              className="p-2 rounded-full bg-blue-500 text-white hover:bg-blue-600 transition-colors"
-                              title="Assign Assessment"
-                            >
-                              <BookOpen className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </td>
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+              <StatusCard 
+                title="Total Applications" 
+                count={applications.length}
+                icon={Users}
+                className="bg-blue-100 text-blue-600"
+              />
+              <StatusCard 
+                title="Pending Review" 
+                count={applications.filter(app => !app.status || app.status === 'pending').length}
+                icon={Clock}
+                className="bg-yellow-100 text-yellow-600"
+              />
+              <StatusCard 
+                title="Processed" 
+                count={applications.filter(app => app.status === 'accepted' || app.status === 'rejected').length}
+                icon={FileText}
+                className="bg-green-100 text-green-600"
+              />
+            </div>
+
+            <Card>
+              <CardContent className="p-6">
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b">
+                        <th className="text-left p-3 text-sm font-semibold text-gray-600">Job Title</th>
+                        <th className="text-left p-3 text-sm font-semibold text-gray-600">Candidate</th>
+                        <th className="text-left p-3 text-sm font-semibold text-gray-600">Contact</th>
+                        <th className="text-left p-3 text-sm font-semibold text-gray-600">Experience</th>
+                        <th className="text-left p-3 text-sm font-semibold text-gray-600">Skills</th>
+                        <th className="text-left p-3 text-sm font-semibold text-gray-600">Status</th>
+                        <th className="text-left p-3 text-sm font-semibold text-gray-600">Resume</th>
+                        <th className="text-right p-3 text-sm font-semibold text-gray-600">Actions</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </CardContent>
-          </Card>
+                    </thead>
+                    <tbody>
+                      {getFilteredApplications().map((app) => (
+                        <tr key={app.id} className="border-b hover:bg-gray-50">
+                          <td className="p-3">
+                            <p className="font-medium text-gray-900">{app.jobTitle}</p>
+                          </td>
+                          <td className="p-3">
+                            <div>
+                              <p className="font-medium text-gray-900">{app.name}</p>
+                              <p className="text-sm text-gray-500">{app.education}</p>
+                            </div>
+                          </td>
+                          <td className="p-3">
+                            <div>
+                              <p className="text-sm">{app.email}</p>
+                              <p className="text-sm text-gray-500">{app.phone}</p>
+                            </div>
+                          </td>
+                          <td className="p-3 text-sm">{app.experience}</td>
+                          <td className="p-3">
+                            <div className="flex flex-wrap gap-1">
+                              {app.skills.split(',').map((skill, index) => (
+                                <span key={index} className="px-2 py-1 bg-gray-100 rounded-full text-xs">
+                                  {skill.trim()}
+                                </span>
+                              ))}
+                            </div>
+                          </td>
+                          <td className="p-3">
+                            <span className={getStatusBadge(app.status)}>
+                              {app.status || 'pending'}
+                            </span>
+                          </td>
+                          <td className="p-3">
+                            <a
+                              href={app.resumeURL}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-blue-600 hover:text-blue-800 inline-flex items-center gap-1 text-sm"
+                            >
+                              <FileText className="w-4 h-4" />
+                              View
+                            </a>
+                          </td>
+                          <td className="p-3">
+                            <div className="flex justify-end space-x-2">
+                              <button
+                                onClick={() => handleStatusUpdate(app.id, 'accepted')}
+                                disabled={updateLoading[app.id] || app.status === 'accepted'}
+                                className="p-2 rounded-full bg-green-500 text-white hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                title="Accept application"
+                              >
+                                {updateLoading[app.id] ? (
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : (
+                                  <Check className="w-4 h-4" />
+                                )}
+                              </button>
+                              <button
+                                onClick={() => handleStatusUpdate(app.id, 'rejected')}
+                                disabled={updateLoading[app.id] || app.status === 'rejected'}
+                                className="p-2 rounded-full bg-red-500 text-white hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                title="Reject application"
+                              >
+                                {updateLoading[app.id] ? (
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : (
+                                  <X className="w-4 h-4" />
+                                )}
+                              </button>
+                              <button
+                                onClick={() => navigate(`/assessment/assign?candidateId=${app.userId}`)}
+                                className="p-2 rounded-full bg-blue-500 text-white hover:bg-blue-600 transition-colors"
+                                title="Assign Assessment"
+                              >
+                                <BookOpen className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+          </>
         )}
       </div>
     </div>
