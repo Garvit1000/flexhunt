@@ -1,10 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { collection, getDocs, updateDoc, doc, query, where } from 'firebase/firestore';
-import { getAuth } from 'firebase/auth';
 import { db } from '../firebase';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
-import { Check, X, Loader2, FileText, Users, Clock, Filter, BookOpen } from 'lucide-react';
+import { Check, X, Loader2, FileText, Filter } from 'lucide-react';
 import { useAuth } from '../components/AuthContext';
 import { useNavigate } from 'react-router-dom';
 
@@ -13,9 +12,8 @@ export default function ApplicationPage() {
   const [loading, setLoading] = useState(true);
   const [updateLoading, setUpdateLoading] = useState({});
   const [filterStatus, setFilterStatus] = useState('all');
-  const { currentUser, loading: authLoading } = useAuth();
+  const { currentUser } = useAuth();
   const navigate = useNavigate();
-  const [recruiterJobs, setRecruiterJobs] = useState([]);
 
   const getUserRole = () => {
     const userEmail = currentUser?.email;
@@ -23,41 +21,53 @@ export default function ApplicationPage() {
   };
 
   useEffect(() => {
-    if (!authLoading && currentUser && getUserRole() === 'recruiter') {
-      fetchRecruiterJobs();
-    }
-  }, [currentUser, authLoading]);
+    if (!currentUser) return;
+    fetchApplications();
+  }, [currentUser]);
 
-  const fetchRecruiterJobs = async () => {
+  const fetchApplications = async () => {
+    if (!currentUser) return;
+
     try {
       setLoading(true);
-      // Query jobs posted by this recruiter
+      
+      // First get all jobs posted by this recruiter
       const jobsQuery = query(
         collection(db, 'jobs'),
-        where('recruiterEmail', '==', currentUser.email)
+        where('recruiterId', '==', currentUser.uid)
       );
+      
       const jobsSnapshot = await getDocs(jobsQuery);
-      const jobs = jobsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setRecruiterJobs(jobs);
+      const recruiterJobs = jobsSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
 
-      // Fetch applications for all jobs
+      console.log('Recruiter jobs:', recruiterJobs); // Debug log
+
+      // Then get applications for each job
       const allApplications = [];
-      for (const job of jobs) {
+      for (const job of recruiterJobs) {
         const applicationsQuery = query(
           collection(db, 'applications'),
           where('jobId', '==', job.id)
         );
+        
         const applicationsSnapshot = await getDocs(applicationsQuery);
         const jobApplications = applicationsSnapshot.docs.map(doc => ({
           id: doc.id,
           ...doc.data(),
-          jobTitle: job.title || 'Unknown Job'
+          jobTitle: job.role || 'Unknown Position',
+          companyName: job.companyName || 'Unknown Company'
         }));
+        
         allApplications.push(...jobApplications);
       }
+
+      console.log('All applications:', allApplications); // Debug log
       setApplications(allApplications);
     } catch (error) {
-      console.error('Error fetching data:', error);
+      console.error('Error fetching applications:', error);
     } finally {
       setLoading(false);
     }
@@ -103,14 +113,6 @@ export default function ApplicationPage() {
     if (filterStatus === 'all') return applications;
     return applications.filter(app => app.status === filterStatus);
   };
-
-  if (authLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
-      </div>
-    );
-  }
 
   if (!currentUser) {
     return (
@@ -161,25 +163,21 @@ export default function ApplicationPage() {
         </div>
 
         {loading ? (
-          <Card>
-            <CardContent className="flex items-center justify-center p-12">
-              <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
-            </CardContent>
-          </Card>
-        ) : recruiterJobs.length === 0 ? (
+          <div className="flex items-center justify-center p-12">
+            <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
+          </div>
+        ) : applications.length === 0 ? (
           <Alert>
-            <AlertTitle>No Jobs Posted</AlertTitle>
+            <AlertTitle>No Applications Yet</AlertTitle>
             <AlertDescription>
-              You haven't posted any jobs yet. Post a job to start receiving applications.
+              You haven't received any applications for your job posts yet.
             </AlertDescription>
           </Alert>
         ) : filteredApplications.length === 0 ? (
           <Alert>
             <AlertTitle>No Applications Found</AlertTitle>
             <AlertDescription>
-              {filterStatus === 'all' 
-                ? "You haven't received any applications for your job posts yet."
-                : `No ${filterStatus} applications found.`}
+              No applications found with the selected filter.
             </AlertDescription>
           </Alert>
         ) : (
@@ -193,8 +191,8 @@ export default function ApplicationPage() {
                     </CardTitle>
                     <p className="text-sm text-gray-500">Applied for: {application.jobTitle}</p>
                   </div>
-                  <span className={getStatusBadge(application.status)}>
-                    {application.status.charAt(0).toUpperCase() + application.status.slice(1)}
+                  <span className={getStatusBadge(application.status || 'pending')}>
+                    {(application.status || 'pending').charAt(0).toUpperCase() + (application.status || 'pending').slice(1)}
                   </span>
                 </CardHeader>
                 <CardContent>
@@ -227,7 +225,7 @@ export default function ApplicationPage() {
                           View Resume
                         </a>
                       )}
-                      {application.status === 'pending' && (
+                      {(!application.status || application.status === 'pending') && (
                         <div className="flex gap-2 ml-auto">
                           <button
                             onClick={() => handleStatusUpdate(application.id, 'accepted')}

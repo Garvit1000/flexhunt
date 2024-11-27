@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { collection, addDoc } from 'firebase/firestore';
 import { db } from '../firebase';
+import { useAuth } from '../components/AuthContext';
 import { 
   TextField, 
   Button, 
@@ -21,6 +22,7 @@ import {
 import { Close as CloseIcon } from '@mui/icons-material';
 
 const PostJobPage = () => {
+  const { currentUser } = useAuth();
   const [activeStep, setActiveStep] = useState(0);
   const [snackbar, setSnackbar] = useState({ open: false, message: '' });
   const [jobData, setJobData] = useState({
@@ -50,8 +52,21 @@ const PostJobPage = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!currentUser) {
+      setSnackbar({ open: true, message: 'Please sign in to post a job.' });
+      return;
+    }
+
     try {
-      await addDoc(collection(db, 'jobs'), jobData);
+      const jobWithRecruiterInfo = {
+        ...jobData,
+        recruiterId: currentUser.uid,
+        recruiterEmail: currentUser.email,
+        createdAt: new Date(),
+        status: 'active'
+      };
+
+      await addDoc(collection(db, 'jobs'), jobWithRecruiterInfo);
       setSnackbar({ open: true, message: 'Job posted successfully!' });
       setJobData({
         companyName: '',
