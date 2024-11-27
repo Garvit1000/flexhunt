@@ -32,6 +32,9 @@ import AssessmentList from './components/assessment/AssessmentList';
 import AssignAssessment from './components/assessment/AssignAssessment';
 import PendingAssessments from './pages/PendingAssessments';
 
+// Import Bootstrap CSS
+import 'bootstrap/dist/css/bootstrap.min.css';
+
 const App = () => {
   const [isSignInOpen, setIsSignInOpen] = useState(false);
   const [userRole, setUserRole] = useState(null);

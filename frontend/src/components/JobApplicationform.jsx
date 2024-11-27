@@ -181,6 +181,7 @@ export default function JobApplicationForm({ jobId, isOpen, setIsOpen }) {
 
       await addDoc(collection(db, 'applications'), {
         userId: currentUser.uid,
+        candidateId: currentUser.uid,  
         name: formData.name,
         email: formData.email,
         phone: formData.phone,
@@ -189,7 +190,7 @@ export default function JobApplicationForm({ jobId, isOpen, setIsOpen }) {
         skills: formData.skills,
         resumeURL,
         jobId,
-        ...jobDetails, // Include all job details directly
+        ...jobDetails, 
         status: 'pending',
         submittedAt: new Date(),
       });

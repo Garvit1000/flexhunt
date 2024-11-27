@@ -63,23 +63,67 @@ const CreateAssessment = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+
+    if (selectedQuestions.length === 0) {
+      setError('Please select at least one question for the assessment');
+      return;
+    }
+
+    if (!formData.title || !formData.duration) {
+      setError('Please fill in all required fields');
+      return;
+    }
+
     try {
+      // Get the selected questions' full data
+      const selectedQuestionsData = questions.filter(q => selectedQuestions.includes(q._id));
+      
+      // Convert dates to timestamps if they exist
+      const startDate = formData.startDate ? new Date(formData.startDate) : null;
+      const endDate = formData.endDate ? new Date(formData.endDate) : null;
+
       const assessmentData = {
-        ...formData,
-        questions: selectedQuestions,
+        title: formData.title,
+        jobPosting: formData.jobPosting || '',
+        duration: parseInt(formData.duration) || 60,
+        startDate: startDate,
+        endDate: endDate,
+        passingScore: parseInt(formData.passingScore) || 70,
+        questions: selectedQuestionsData.map(q => ({
+          id: q._id,
+          question: q.question,
+          options: q.options.map(opt => opt.text), // Convert options to array of strings
+          correctOption: q.options.findIndex(opt => opt.isCorrect), // Store index of correct option
+          points: parseInt(q.points) || 1,
+          category: q.category || '',
+          difficulty: q.difficulty || 'medium'
+        })),
+        totalPoints: selectedQuestionsData.reduce((sum, q) => sum + (parseInt(q.points) || 1), 0),
         createdBy: currentUser.uid,
+        creatorName: currentUser?.displayName || 'Anonymous',
         createdAt: serverTimestamp(),
-        status: 'active'
+        status: 'active',
+        totalQuestions: selectedQuestions.length,
+        timeLimit: parseInt(formData.duration) || 60,
+        settings: {
+          preventTabSwitch: Boolean(formData.settings?.preventTabSwitch),
+          requireFullScreen: Boolean(formData.settings?.requireFullScreen),
+          preventMultipleDisplays: Boolean(formData.settings?.preventMultipleDisplays),
+          preventCopyPaste: Boolean(formData.settings?.preventCopyPaste),
+          shuffleQuestions: Boolean(formData.settings?.randomizeQuestions),
+          showResults: Boolean(formData.settings?.showResults)
+        }
       };
 
       // Add assessment to Firebase
       const assessmentsRef = collection(db, 'assessments');
-      await addDoc(assessmentsRef, assessmentData);
+      const docRef = await addDoc(assessmentsRef, assessmentData);
       
+      alert('Assessment created successfully!');
       navigate('/assessments');
     } catch (error) {
       console.error('Error creating assessment:', error);
-      setError('Failed to create assessment');
+      setError('Failed to create assessment: ' + error.message);
     }
   };
 

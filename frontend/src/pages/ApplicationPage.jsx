@@ -354,7 +354,7 @@ export default function ApplicationPage() {
                                 </>
                               )}
                               <button
-                                onClick={() => navigate(`/assessment/assign?candidateId=${app.userId}`)}
+                                onClick={() => navigate(`/assessment/assign?candidateId=${app.candidateId}`)}
                                 className="p-2 rounded-full bg-blue-500 text-white hover:bg-blue-600 transition-colors"
                                 title="Assign Assessment"
                               >

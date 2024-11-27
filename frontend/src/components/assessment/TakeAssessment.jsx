@@ -20,6 +20,7 @@ const TakeAssessment = () => {
   const [violationCount, setViolationCount] = useState(0);
   const [warningShown, setWarningShown] = useState(false);
   const [hasStarted, setHasStarted] = useState(false);
+  const [assignmentRef, setAssignmentRef] = useState(null);
   const maxViolations = 3;
 
   // Fetch assessment and verify access
@@ -41,6 +42,19 @@ const TakeAssessment = () => {
           return;
         }
 
+        // Check if assessment has already been completed
+        const assignmentDoc = assignmentSnapshot.docs[0];
+        const assignmentData = assignmentDoc.data();
+        
+        if (assignmentData.completed) {
+          setError('You have already completed this assessment. Multiple attempts are not allowed.');
+          setLoading(false);
+          return;
+        }
+
+        // Store assignment document reference for later use
+        setAssignmentRef(assignmentDoc.ref);
+
         // Fetch the assessment details
         const assessmentRef = doc(db, 'assessments', assessmentId);
         const assessmentSnap = await getDoc(assessmentRef);
@@ -56,33 +70,26 @@ const TakeAssessment = () => {
           ...assessmentSnap.data()
         };
 
-        // Fetch the full question data for each question ID
-        const questionPromises = assessmentData.questions.map(async (questionId) => {
-          const questionRef = doc(db, 'questions', questionId);
-          const questionSnap = await getDoc(questionRef);
-          if (questionSnap.exists()) {
-            return {
-              id: questionSnap.id,
-              ...questionSnap.data()
-            };
-          }
-          return null;
-        });
-
-        const questions = await Promise.all(questionPromises);
-        const validQuestions = questions.filter(q => q !== null);
-
-        if (validQuestions.length === 0) {
-          setError('No valid questions found in this assessment.');
+        // Check if questions array exists and has valid questions
+        if (!Array.isArray(assessmentData.questions) || assessmentData.questions.length === 0) {
+          setError('No questions found in this assessment.');
           setLoading(false);
           return;
         }
 
-        // Replace question IDs with full question data
-        assessmentData.questions = validQuestions;
+        // Questions are already in the correct format, just need to shuffle if enabled
+        let questions = assessmentData.questions;
+
+        // Randomize questions if enabled
+        if (assessmentData.settings?.shuffleQuestions) {
+          questions = [...questions].sort(() => Math.random() - 0.5);
+        }
 
         // Set initial state
-        setAssessment(assessmentData);
+        setAssessment({
+          ...assessmentData,
+          questions: questions
+        });
         setTimeLeft(assessmentData.duration * 60 || 3600); // Default to 1 hour if no duration set
         setLoading(false);
       } catch (err) {
@@ -152,47 +159,35 @@ const TakeAssessment = () => {
 
   const submitAssessment = async () => {
     try {
-      const assignmentsRef = collection(db, 'assessmentAssignments');
-      const assignmentQuery = query(
-        assignmentsRef,
-        where('assessmentId', '==', assessmentId),
-        where('candidateId', '==', currentUser.uid)
-      );
-      const assignmentSnapshot = await getDocs(assignmentQuery);
-      
-      if (!assignmentSnapshot.empty) {
-        const assignmentDoc = assignmentSnapshot.docs[0];
-        
-        // Calculate score
-        let correctAnswers = 0;
-        assessment.questions.forEach(question => {
-          if (answers[question.id] === question.correctOption) {
-            correctAnswers++;
-          }
-        });
-        
-        const score = Math.round((correctAnswers / assessment.questions.length) * 100);
-        const passingScore = assessment.passingScore || 70;
-        
-        await updateDoc(assignmentDoc.ref, {
-          answers,
-          completed: true,
-          completedAt: new Date(),
-          securityViolations,
-          violationCount,
-          score,
-          passed: score >= passingScore
-        });
-
-        // Update the application status if this is linked to an application
-        if (assessment.applicationId) {
-          const applicationRef = doc(db, 'applications', assessment.applicationId);
-          await updateDoc(applicationRef, {
-            assessmentCompleted: true,
-            assessmentScore: score,
-            assessmentPassed: score >= passingScore
-          });
+      // Calculate score
+      let correctAnswers = 0;
+      assessment.questions.forEach(question => {
+        if (answers[question.id] === question.correctOption) {
+          correctAnswers++;
         }
+      });
+      
+      const score = Math.round((correctAnswers / assessment.questions.length) * 100);
+      const passingScore = assessment.passingScore || 70;
+      
+      await updateDoc(assignmentRef, {
+        answers,
+        completed: true,
+        completedAt: new Date(),
+        securityViolations,
+        violationCount,
+        score,
+        passed: score >= passingScore
+      });
+
+      // Update the application status if this is linked to an application
+      if (assessment.applicationId) {
+        const applicationRef = doc(db, 'applications', assessment.applicationId);
+        await updateDoc(applicationRef, {
+          assessmentCompleted: true,
+          assessmentScore: score,
+          assessmentPassed: score >= passingScore
+        });
       }
 
       // Exit full screen

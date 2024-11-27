@@ -14,10 +14,11 @@ const AssessmentList = () => {
   useEffect(() => {
     const fetchAssessments = async () => {
       try {
+        const userRole = localStorage.getItem(`role_${currentUser.email}`);
         const assessmentsRef = collection(db, 'assessments');
         let q;
         
-        if (currentUser.role === 'recruiter') {
+        if (userRole === 'recruiter') {
           // Recruiters see assessments they created
           q = query(assessmentsRef, where('createdBy', '==', currentUser.uid));
         } else {
@@ -41,32 +42,56 @@ const AssessmentList = () => {
         const assessmentList = await Promise.all(querySnapshot.docs.map(async doc => {
           const assessment = {
             id: doc.id,
-            ...doc.data()
+            ...doc.data(),
+            createdAt: doc.data().createdAt?.toDate() || new Date()
           };
           
-          // Get analytics data
-          const assignmentsRef = collection(db, 'assessmentAssignments');
-          const assignmentsQuery = query(assignmentsRef, where('assessmentId', '==', doc.id));
-          const assignmentsSnapshot = await getDocs(assignmentsQuery);
-          
-          const totalAttempts = assignmentsSnapshot.docs.length;
-          const completedAttempts = assignmentsSnapshot.docs.filter(doc => doc.data().completed).length;
-          const passedAttempts = assignmentsSnapshot.docs.filter(doc => {
-            const data = doc.data();
-            return data.completed && data.score >= (assessment.passingScore || 70);
-          }).length;
-          
-          return {
-            ...assessment,
-            analytics: {
+          if (userRole === 'recruiter') {
+            // Get analytics data for recruiters
+            const assignmentsRef = collection(db, 'assessmentAssignments');
+            const assignmentsQuery = query(assignmentsRef, where('assessmentId', '==', doc.id));
+            const assignmentsSnapshot = await getDocs(assignmentsQuery);
+            
+            const totalAttempts = assignmentsSnapshot.docs.length;
+            const completedAttempts = assignmentsSnapshot.docs.filter(doc => doc.data().completed).length;
+            const passedAttempts = assignmentsSnapshot.docs.filter(doc => {
+              const data = doc.data();
+              return data.completed && data.score >= (assessment.passingScore || 70);
+            }).length;
+            
+            assessment.analytics = {
               totalAttempts,
               completedAttempts,
-              passedAttempts
+              passedAttempts,
+              averageScore: completedAttempts > 0 
+                ? assignmentsSnapshot.docs
+                    .filter(doc => doc.data().completed)
+                    .reduce((sum, doc) => sum + (doc.data().score || 0), 0) / completedAttempts
+                : 0
+            };
+          } else {
+            // Get candidate's assignment status
+            const assignmentRef = collection(db, 'assessmentAssignments');
+            const assignmentQuery = query(
+              assignmentRef,
+              where('assessmentId', '==', doc.id),
+              where('candidateId', '==', currentUser.uid)
+            );
+            const assignmentSnapshot = await getDocs(assignmentQuery);
+            
+            if (!assignmentSnapshot.empty) {
+              const assignmentData = assignmentSnapshot.docs[0].data();
+              assessment.status = assignmentData.completed ? 'completed' : 'pending';
+              assessment.score = assignmentData.score;
+              assessment.passed = assignmentData.score >= (assessment.passingScore || 70);
             }
-          };
+          }
+          
+          return assessment;
         }));
         
-        setAssessments(assessmentList);
+        // Sort by creation date, newest first
+        setAssessments(assessmentList.sort((a, b) => b.createdAt - a.createdAt));
         setLoading(false);
       } catch (err) {
         console.error('Error fetching assessments:', err);
@@ -206,15 +231,15 @@ const AssessmentList = () => {
                   <div className="grid grid-cols-3 gap-2 text-sm">
                     <div>
                       <div className="text-gray-600">Total</div>
-                      <div className="font-semibold">{assessment.analytics.totalAttempts}</div>
+                      <div className="font-semibold">{assessment.analytics?.totalAttempts}</div>
                     </div>
                     <div>
                       <div className="text-gray-600">Completed</div>
-                      <div className="font-semibold">{assessment.analytics.completedAttempts}</div>
+                      <div className="font-semibold">{assessment.analytics?.completedAttempts}</div>
                     </div>
                     <div>
                       <div className="text-gray-600">Passed</div>
-                      <div className="font-semibold">{assessment.analytics.passedAttempts}</div>
+                      <div className="font-semibold">{assessment.analytics?.passedAttempts}</div>
                     </div>
                   </div>
                 </div>

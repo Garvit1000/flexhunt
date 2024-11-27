@@ -190,6 +190,7 @@ export default function InternshipApplicationForm({ internshipId, isOpen, setIsO
 
       await addDoc(collection(db, 'internshipApplications'), {
         userId: currentUser.uid,
+        candidateId: currentUser.uid,
         name: formData.name,
         email: formData.email,
         phone: formData.phone,
