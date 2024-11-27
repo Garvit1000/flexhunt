@@ -23,14 +23,15 @@ export default function ApplicationPage() {
   };
 
   useEffect(() => {
-    if (currentUser && getUserRole() === 'recruiter') {
+    if (!authLoading && currentUser && getUserRole() === 'recruiter') {
       fetchRecruiterJobs();
     }
-  }, [currentUser]);
+  }, [currentUser, authLoading]);
 
   const fetchRecruiterJobs = async () => {
     try {
       setLoading(true);
+      // Query jobs posted by this recruiter
       const jobsQuery = query(
         collection(db, 'jobs'),
         where('recruiterEmail', '==', currentUser.email)
@@ -40,29 +41,21 @@ export default function ApplicationPage() {
       setRecruiterJobs(jobs);
 
       // Fetch applications for all jobs
-      if (jobs.length > 0) {
-        const jobIds = jobs.map(job => job.id);
-        const batchSize = 10; // Process in batches of 10 jobs
-        const allApplications = [];
-
-        // Process jobs in batches to avoid query limitations
-        for (let i = 0; i < jobIds.length; i += batchSize) {
-          const batchJobIds = jobIds.slice(i, i + batchSize);
-          const applicationsQuery = query(
-            collection(db, 'applications'),
-            where('jobId', 'in', batchJobIds)
-          );
-          const querySnapshot = await getDocs(applicationsQuery);
-          const batchApplications = querySnapshot.docs.map(doc => ({
-            id: doc.id,
-            ...doc.data(),
-            jobTitle: jobs.find(job => job.id === doc.data().jobId)?.title || 'Unknown Job'
-          }));
-          allApplications.push(...batchApplications);
-        }
-
-        setApplications(allApplications);
+      const allApplications = [];
+      for (const job of jobs) {
+        const applicationsQuery = query(
+          collection(db, 'applications'),
+          where('jobId', '==', job.id)
+        );
+        const applicationsSnapshot = await getDocs(applicationsQuery);
+        const jobApplications = applicationsSnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data(),
+          jobTitle: job.title || 'Unknown Job'
+        }));
+        allApplications.push(...jobApplications);
       }
+      setApplications(allApplications);
     } catch (error) {
       console.error('Error fetching data:', error);
     } finally {
@@ -111,20 +104,6 @@ export default function ApplicationPage() {
     return applications.filter(app => app.status === filterStatus);
   };
 
-  const StatusCard = ({ title, count, icon: Icon, className }) => (
-    <Card className="bg-white">
-      <CardContent className="flex items-center p-6">
-        <div className={`p-3 rounded-full ${className} mr-4`}>
-          <Icon className="w-6 h-6" />
-        </div>
-        <div>
-          <p className="text-sm font-medium text-gray-600">{title}</p>
-          <p className="text-2xl font-semibold">{count}</p>
-        </div>
-      </CardContent>
-    </Card>
-  );
-
   if (authLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -159,6 +138,8 @@ export default function ApplicationPage() {
     );
   }
 
+  const filteredApplications = getFilteredApplications();
+
   return (
     <div className="p-8 bg-gray-50 min-h-screen">
       <div className="max-w-7xl mx-auto">
@@ -192,139 +173,94 @@ export default function ApplicationPage() {
               You haven't posted any jobs yet. Post a job to start receiving applications.
             </AlertDescription>
           </Alert>
-        ) : applications.length === 0 ? (
+        ) : filteredApplications.length === 0 ? (
           <Alert>
-            <AlertTitle>No Applications Yet</AlertTitle>
+            <AlertTitle>No Applications Found</AlertTitle>
             <AlertDescription>
-              You haven't received any applications for your job posts yet.
+              {filterStatus === 'all' 
+                ? "You haven't received any applications for your job posts yet."
+                : `No ${filterStatus} applications found.`}
             </AlertDescription>
           </Alert>
         ) : (
-          <>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-              <StatusCard 
-                title="Total Applications" 
-                count={applications.length}
-                icon={Users}
-                className="bg-blue-100 text-blue-600"
-              />
-              <StatusCard 
-                title="Pending Review" 
-                count={applications.filter(app => !app.status || app.status === 'pending').length}
-                icon={Clock}
-                className="bg-yellow-100 text-yellow-600"
-              />
-              <StatusCard 
-                title="Processed" 
-                count={applications.filter(app => app.status === 'accepted' || app.status === 'rejected').length}
-                icon={FileText}
-                className="bg-green-100 text-green-600"
-              />
-            </div>
-
-            <Card>
-              <CardContent className="p-6">
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead>
-                      <tr className="border-b">
-                        <th className="text-left p-3 text-sm font-semibold text-gray-600">Job Title</th>
-                        <th className="text-left p-3 text-sm font-semibold text-gray-600">Candidate</th>
-                        <th className="text-left p-3 text-sm font-semibold text-gray-600">Contact</th>
-                        <th className="text-left p-3 text-sm font-semibold text-gray-600">Experience</th>
-                        <th className="text-left p-3 text-sm font-semibold text-gray-600">Skills</th>
-                        <th className="text-left p-3 text-sm font-semibold text-gray-600">Status</th>
-                        <th className="text-left p-3 text-sm font-semibold text-gray-600">Resume</th>
-                        <th className="text-right p-3 text-sm font-semibold text-gray-600">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {getFilteredApplications().map((app) => (
-                        <tr key={app.id} className="border-b hover:bg-gray-50">
-                          <td className="p-3">
-                            <p className="font-medium text-gray-900">{app.jobTitle}</p>
-                          </td>
-                          <td className="p-3">
-                            <div>
-                              <p className="font-medium text-gray-900">{app.name}</p>
-                              <p className="text-sm text-gray-500">{app.education}</p>
-                            </div>
-                          </td>
-                          <td className="p-3">
-                            <div>
-                              <p className="text-sm">{app.email}</p>
-                              <p className="text-sm text-gray-500">{app.phone}</p>
-                            </div>
-                          </td>
-                          <td className="p-3 text-sm">{app.experience}</td>
-                          <td className="p-3">
-                            <div className="flex flex-wrap gap-1">
-                              {app.skills.split(',').map((skill, index) => (
-                                <span key={index} className="px-2 py-1 bg-gray-100 rounded-full text-xs">
-                                  {skill.trim()}
-                                </span>
-                              ))}
-                            </div>
-                          </td>
-                          <td className="p-3">
-                            <span className={getStatusBadge(app.status)}>
-                              {app.status || 'pending'}
-                            </span>
-                          </td>
-                          <td className="p-3">
-                            <a
-                              href={app.resumeURL}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-blue-600 hover:text-blue-800 inline-flex items-center gap-1 text-sm"
-                            >
-                              <FileText className="w-4 h-4" />
-                              View
-                            </a>
-                          </td>
-                          <td className="p-3">
-                            <div className="flex justify-end space-x-2">
-                              <button
-                                onClick={() => handleStatusUpdate(app.id, 'accepted')}
-                                disabled={updateLoading[app.id] || app.status === 'accepted'}
-                                className="p-2 rounded-full bg-green-500 text-white hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                                title="Accept application"
-                              >
-                                {updateLoading[app.id] ? (
-                                  <Loader2 className="w-4 h-4 animate-spin" />
-                                ) : (
-                                  <Check className="w-4 h-4" />
-                                )}
-                              </button>
-                              <button
-                                onClick={() => handleStatusUpdate(app.id, 'rejected')}
-                                disabled={updateLoading[app.id] || app.status === 'rejected'}
-                                className="p-2 rounded-full bg-red-500 text-white hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                                title="Reject application"
-                              >
-                                {updateLoading[app.id] ? (
-                                  <Loader2 className="w-4 h-4 animate-spin" />
-                                ) : (
-                                  <X className="w-4 h-4" />
-                                )}
-                              </button>
-                              <button
-                                onClick={() => navigate(`/assessment/assign?candidateId=${app.userId}`)}
-                                className="p-2 rounded-full bg-blue-500 text-white hover:bg-blue-600 transition-colors"
-                                title="Assign Assessment"
-                              >
-                                <BookOpen className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </CardContent>
-            </Card>
-          </>
+          <div className="grid gap-6">
+            {filteredApplications.map((application) => (
+              <Card key={application.id} className="hover:shadow-lg transition-shadow duration-200">
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <div>
+                    <CardTitle className="text-xl font-bold">
+                      {application.name}
+                    </CardTitle>
+                    <p className="text-sm text-gray-500">Applied for: {application.jobTitle}</p>
+                  </div>
+                  <span className={getStatusBadge(application.status)}>
+                    {application.status.charAt(0).toUpperCase() + application.status.slice(1)}
+                  </span>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-4">
+                    <div>
+                      <p className="text-sm text-gray-500">Contact Information</p>
+                      <p className="font-medium">{application.email} • {application.phone}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-500">Experience</p>
+                      <p className="font-medium">{application.experience}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-500">Education</p>
+                      <p className="font-medium">{application.education}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-500">Skills</p>
+                      <p className="font-medium">{application.skills}</p>
+                    </div>
+                    <div className="flex items-center gap-4 pt-4">
+                      {application.resumeURL && (
+                        <a
+                          href={application.resumeURL}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-2 text-indigo-600 hover:text-indigo-800"
+                        >
+                          <FileText className="w-4 h-4" />
+                          View Resume
+                        </a>
+                      )}
+                      {application.status === 'pending' && (
+                        <div className="flex gap-2 ml-auto">
+                          <button
+                            onClick={() => handleStatusUpdate(application.id, 'accepted')}
+                            disabled={updateLoading[application.id]}
+                            className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-md flex items-center gap-2"
+                          >
+                            {updateLoading[application.id] ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <Check className="w-4 h-4" />
+                            )}
+                            Accept
+                          </button>
+                          <button
+                            onClick={() => handleStatusUpdate(application.id, 'rejected')}
+                            disabled={updateLoading[application.id]}
+                            className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-md flex items-center gap-2"
+                          >
+                            {updateLoading[application.id] ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <X className="w-4 h-4" />
+                            )}
+                            Reject
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
         )}
       </div>
     </div>
