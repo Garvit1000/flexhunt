@@ -30,6 +30,7 @@ import CreateAssessment from './components/assessment/CreateAssessment';
 import TakeAssessment from './components/assessment/TakeAssessment';
 import AssessmentList from './components/assessment/AssessmentList';
 import AssignAssessment from './components/assessment/AssignAssessment';
+import PendingAssessments from './pages/PendingAssessments';
 
 const App = () => {
   const [isSignInOpen, setIsSignInOpen] = useState(false);
@@ -101,6 +102,7 @@ const App = () => {
             <Route path="/assessment/create" element={<CreateAssessment />} />
             <Route path="/assessment/take/:assessmentId" element={<TakeAssessment />} />
             <Route path="/assessments" element={<AssessmentList />} />
+            <Route path="/assessments/pending" element={<PendingAssessments />} />
             <Route path="/assessment/assign" element={<AssignAssessment />} />
           </Routes>
         </AuthProvider>

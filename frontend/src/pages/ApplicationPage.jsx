@@ -22,9 +22,15 @@ export default function ApplicationPage() {
     return userEmail ? localStorage.getItem(`role_${userEmail}`) : null;
   };
 
-  // Fetch recruiter's jobs first
+  useEffect(() => {
+    if (currentUser && getUserRole() === 'recruiter') {
+      fetchRecruiterJobs();
+    }
+  }, [currentUser]);
+
   const fetchRecruiterJobs = async () => {
     try {
+      setLoading(true);
       const jobsQuery = query(
         collection(db, 'jobs'),
         where('recruiterEmail', '==', currentUser.email)
@@ -32,41 +38,33 @@ export default function ApplicationPage() {
       const jobsSnapshot = await getDocs(jobsQuery);
       const jobs = jobsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setRecruiterJobs(jobs);
-      return jobs;
-    } catch (error) {
-      console.error('Error fetching recruiter jobs:', error);
-      return [];
-    }
-  };
 
-  useEffect(() => {
-    if (currentUser && getUserRole() === 'recruiter') {
-      fetchRecruiterJobs().then(jobs => {
-        if (jobs.length > 0) {
-          fetchApplications(jobs);
-        } else {
-          setLoading(false);
+      // Fetch applications for all jobs
+      if (jobs.length > 0) {
+        const jobIds = jobs.map(job => job.id);
+        const batchSize = 10; // Process in batches of 10 jobs
+        const allApplications = [];
+
+        // Process jobs in batches to avoid query limitations
+        for (let i = 0; i < jobIds.length; i += batchSize) {
+          const batchJobIds = jobIds.slice(i, i + batchSize);
+          const applicationsQuery = query(
+            collection(db, 'applications'),
+            where('jobId', 'in', batchJobIds)
+          );
+          const querySnapshot = await getDocs(applicationsQuery);
+          const batchApplications = querySnapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data(),
+            jobTitle: jobs.find(job => job.id === doc.data().jobId)?.title || 'Unknown Job'
+          }));
+          allApplications.push(...batchApplications);
         }
-      });
-    }
-  }, [currentUser]);
 
-  const fetchApplications = async (jobs) => {
-    try {
-      const jobIds = jobs.map(job => job.id);
-      const applicationsQuery = query(
-        collection(db, 'applications'),
-        where('jobId', 'in', jobIds)
-      );
-      const querySnapshot = await getDocs(applicationsQuery);
-      const apps = querySnapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-        jobTitle: jobs.find(job => job.id === doc.data().jobId)?.title || 'Unknown Job'
-      }));
-      setApplications(apps);
+        setApplications(allApplications);
+      }
     } catch (error) {
-      console.error('Error fetching applications:', error);
+      console.error('Error fetching data:', error);
     } finally {
       setLoading(false);
     }
@@ -181,11 +179,24 @@ export default function ApplicationPage() {
           </div>
         </div>
 
-        {recruiterJobs.length === 0 && !loading ? (
+        {loading ? (
+          <Card>
+            <CardContent className="flex items-center justify-center p-12">
+              <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
+            </CardContent>
+          </Card>
+        ) : recruiterJobs.length === 0 ? (
           <Alert>
             <AlertTitle>No Jobs Posted</AlertTitle>
             <AlertDescription>
               You haven't posted any jobs yet. Post a job to start receiving applications.
+            </AlertDescription>
+          </Alert>
+        ) : applications.length === 0 ? (
+          <Alert>
+            <AlertTitle>No Applications Yet</AlertTitle>
+            <AlertDescription>
+              You haven't received any applications for your job posts yet.
             </AlertDescription>
           </Alert>
         ) : (

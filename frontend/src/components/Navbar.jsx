@@ -9,9 +9,15 @@ const navigationItems = [
   { name: 'Jobs', href: '/job-page', current: false },
   { name: 'Internships', href: '/internship-page', current: false },
   { name: 'Freelance', href: '/gigs', current: false },
-  { name: 'Assessments', href: '/assessment/question-bank', current: false },
   { name: 'Community', href: 'https://flex-community.vercel.app/', current: false, icon: Users }
 ];
+
+const jobSeekerNavItems = [
+  ...navigationItems,
+  { name: 'Assessments', href: '/assessments/pending', current: false }
+];
+
+const recruiterNavItems = [...navigationItems];
 
 const PhotoAvatar = ({ user, size = 'h-8 w-8' }) => {
   const [imgSrc, setImgSrc] = useState(null);
@@ -59,14 +65,25 @@ const PhotoAvatar = ({ user, size = 'h-8 w-8' }) => {
 
   if (error || !imgSrc) {
     // Fallback to initials or default avatar
+    const getInitial = () => {
+      if (user?.displayName) {
+        return user.displayName.charAt(0).toUpperCase();
+      }
+      if (user?.email) {
+        return user.email.charAt(0).toUpperCase();
+      }
+      return 'U';
+    };
+
     return (
       <div className={`${size} rounded-full bg-indigo-100 flex items-center justify-center`}>
         <span className="text-indigo-600 font-medium text-sm">
-          {user?.displayName ? user.displayName.charAt(0).toUpperCase() : 'U'}
+          {getInitial()}
         </span>
       </div>
     );
   }
+
   return (
     <img
       src={imgSrc}
@@ -297,6 +314,13 @@ const Navbar = ({ onSignInClick }) => {
     setIsOpen(false);
   };
 
+  const getNavItems = () => {
+    if (userRole === 'jobseeker') {
+      return jobSeekerNavItems;
+    }
+    return recruiterNavItems;
+  };
+
   return (
     <>
       <nav className={`fixed w-full top-0 z-50 transition-all duration-300 ${isScrolled ? 'bg-white shadow-lg' : 'bg-transparent'
@@ -317,7 +341,7 @@ const Navbar = ({ onSignInClick }) => {
                 </Link>
               </div>
               <div className="hidden md:ml-6 md:flex md:space-x-8">
-                {navigationItems.map((item) => (
+                {getNavItems().map((item) => (
                   item.href.startsWith('http') ? (
                     <a
                       key={item.name}
@@ -385,7 +409,7 @@ const Navbar = ({ onSignInClick }) => {
 
         <div className={`md:hidden transition-all duration-300 ease-in-out ${isOpen ? 'max-h-screen' : 'max-h-0 overflow-hidden'}`}>
           <div className="px-2 pt-2 pb-3 space-y-1 bg-white shadow-lg">
-            {navigationItems.map((item) => (
+            {getNavItems().map((item) => (
               item.href.startsWith('http') ? (
                 <a
                   key={item.name}
