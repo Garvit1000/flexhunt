@@ -43,8 +43,6 @@ export default function ApplicationPage() {
         ...doc.data()
       }));
 
-      console.log('Recruiter jobs:', recruiterJobs); // Debug log
-
       // Then get applications for each job
       const allApplications = [];
       for (const job of recruiterJobs) {
@@ -54,17 +52,43 @@ export default function ApplicationPage() {
         );
         
         const applicationsSnapshot = await getDocs(applicationsQuery);
-        const jobApplications = applicationsSnapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data(),
-          jobTitle: job.role || 'Unknown Position',
-          companyName: job.companyName || 'Unknown Company'
+        
+        // Get assessment data for each application
+        const jobApplications = await Promise.all(applicationsSnapshot.docs.map(async doc => {
+          const appData = {
+            id: doc.id,
+            ...doc.data(),
+            jobTitle: job.role || 'Unknown Position',
+            companyName: job.companyName || 'Unknown Company'
+          };
+
+          // Get assessment data if it exists
+          if (appData.assessmentId) {
+            const assignmentsRef = collection(db, 'assessmentAssignments');
+            const assignmentQuery = query(
+              assignmentsRef,
+              where('assessmentId', '==', appData.assessmentId),
+              where('candidateId', '==', appData.candidateId)
+            );
+            const assignmentSnapshot = await getDocs(assignmentQuery);
+
+            if (!assignmentSnapshot.empty) {
+              const assignmentData = assignmentSnapshot.docs[0].data();
+              appData.assessment = {
+                completed: assignmentData.completed || false,
+                score: assignmentData.score,
+                passed: assignmentData.score >= (assignmentData.passingScore || 70),
+                completedAt: assignmentData.completedAt
+              };
+            }
+          }
+
+          return appData;
         }));
         
         allApplications.push(...jobApplications);
       }
 
-      console.log('All applications:', allApplications); // Debug log
       setApplications(allApplications);
     } catch (error) {
       console.error('Error fetching applications:', error);
@@ -222,6 +246,7 @@ export default function ApplicationPage() {
                         <th className="text-left p-3 text-sm font-semibold text-gray-600">Experience</th>
                         <th className="text-left p-3 text-sm font-semibold text-gray-600">Skills</th>
                         <th className="text-left p-3 text-sm font-semibold text-gray-600">Status</th>
+                        <th className="text-left p-3 text-sm font-semibold text-gray-600">Assessment</th>
                         <th className="text-left p-3 text-sm font-semibold text-gray-600">Resume</th>
                         <th className="text-right p-3 text-sm font-semibold text-gray-600">Actions</th>
                       </tr>
@@ -258,6 +283,32 @@ export default function ApplicationPage() {
                             <span className={getStatusBadge(app.status || 'pending')}>
                               {(app.status || 'pending').charAt(0).toUpperCase() + (app.status || 'pending').slice(1)}
                             </span>
+                          </td>
+                          <td className="p-3">
+                            {app.assessment ? (
+                              <div className="flex items-center gap-2">
+                                <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                                  app.assessment.completed 
+                                    ? app.assessment.passed
+                                      ? 'bg-green-100 text-green-800'
+                                      : 'bg-red-100 text-red-800'
+                                    : 'bg-yellow-100 text-yellow-800'
+                                }`}>
+                                  {app.assessment.completed 
+                                    ? app.assessment.passed
+                                      ? 'Passed'
+                                      : 'Failed'
+                                    : 'Pending'}
+                                </span>
+                                {app.assessment.completed && (
+                                  <span className="text-sm text-gray-500">
+                                    Score: {app.assessment.score}%
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-sm text-gray-500">Not assigned</span>
+                            )}
                           </td>
                           <td className="p-3">
                             {app.resumeURL && (

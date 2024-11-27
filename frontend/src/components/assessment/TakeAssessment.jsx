@@ -162,14 +162,37 @@ const TakeAssessment = () => {
       
       if (!assignmentSnapshot.empty) {
         const assignmentDoc = assignmentSnapshot.docs[0];
+        
+        // Calculate score
+        let correctAnswers = 0;
+        assessment.questions.forEach(question => {
+          if (answers[question.id] === question.correctOption) {
+            correctAnswers++;
+          }
+        });
+        
+        const score = Math.round((correctAnswers / assessment.questions.length) * 100);
+        const passingScore = assessment.passingScore || 70;
+        
         await updateDoc(assignmentDoc.ref, {
           answers,
           completed: true,
           completedAt: new Date(),
           securityViolations,
           violationCount,
-          // Calculate score here if needed
+          score,
+          passed: score >= passingScore
         });
+
+        // Update the application status if this is linked to an application
+        if (assessment.applicationId) {
+          const applicationRef = doc(db, 'applications', assessment.applicationId);
+          await updateDoc(applicationRef, {
+            assessmentCompleted: true,
+            assessmentScore: score,
+            assessmentPassed: score >= passingScore
+          });
+        }
       }
 
       // Exit full screen
