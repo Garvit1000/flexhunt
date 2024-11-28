@@ -225,24 +225,53 @@ const AssessmentList = () => {
                 <h2 className="text-xl font-semibold mb-2">{assessment.title}</h2>
                 <p className="text-gray-600 mb-4">{assessment.description}</p>
                 
-                {/* Analytics Section */}
-                <div className="bg-gray-50 p-3 rounded mb-4">
-                  <h3 className="font-medium mb-2">Analytics</h3>
-                  <div className="grid grid-cols-3 gap-2 text-sm">
-                    <div>
-                      <div className="text-gray-600">Total</div>
-                      <div className="font-semibold">{assessment.analytics?.totalAttempts}</div>
-                    </div>
-                    <div>
-                      <div className="text-gray-600">Completed</div>
-                      <div className="font-semibold">{assessment.analytics?.completedAttempts}</div>
-                    </div>
-                    <div>
-                      <div className="text-gray-600">Passed</div>
-                      <div className="font-semibold">{assessment.analytics?.passedAttempts}</div>
+                {currentUser.role === 'recruiter' ? (
+                  /* Analytics Section for recruiters */
+                  <div className="bg-gray-50 p-3 rounded mb-4">
+                    <h3 className="font-medium mb-2">Analytics</h3>
+                    <div className="grid grid-cols-3 gap-2 text-sm">
+                      <div>
+                        <div className="text-gray-600">Total</div>
+                        <div className="font-semibold">{assessment.analytics?.totalAttempts}</div>
+                      </div>
+                      <div>
+                        <div className="text-gray-600">Completed</div>
+                        <div className="font-semibold">{assessment.analytics?.completedAttempts}</div>
+                      </div>
+                      <div>
+                        <div className="text-gray-600">Passed</div>
+                        <div className="font-semibold">{assessment.analytics?.passedAttempts}</div>
+                      </div>
                     </div>
                   </div>
-                </div>
+                ) : (
+                  /* Status Section for job seekers */
+                  <div className="bg-gray-50 p-3 rounded mb-4">
+                    <h3 className="font-medium mb-2">Status</h3>
+                    <div className="flex justify-between items-center">
+                      <div className="flex items-center gap-2">
+                        <span className={`px-2 py-1 rounded-full text-sm font-medium ${
+                          assessment.status === 'completed'
+                            ? assessment.passed
+                              ? 'bg-green-100 text-green-800'
+                              : 'bg-red-100 text-red-800'
+                            : 'bg-yellow-100 text-yellow-800'
+                        }`}>
+                          {assessment.status === 'completed'
+                            ? assessment.passed
+                              ? 'Passed'
+                              : 'Failed'
+                            : 'Pending'}
+                        </span>
+                        {assessment.status === 'completed' && (
+                          <span className="text-sm text-gray-600">
+                            Score: {assessment.score}%
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 <div className="flex justify-between items-center">
                   {currentUser.role === 'recruiter' ? (
@@ -252,6 +281,10 @@ const AssessmentList = () => {
                     >
                       Edit
                     </button>
+                  ) : assessment.status === 'completed' ? (
+                    <div className="text-gray-600 text-sm">
+                      Assessment completed
+                    </div>
                   ) : (
                     <Link 
                       to={`/assessment/take/${assessment.id}`}

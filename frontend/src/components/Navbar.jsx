@@ -12,10 +12,7 @@ const navigationItems = [
   { name: 'Community', href: 'https://flex-community.vercel.app/', current: false, icon: Users }
 ];
 
-const jobSeekerNavItems = [
-  ...navigationItems,
-  { name: 'Assessments', href: '/assessments/pending', current: false }
-];
+const jobSeekerNavItems = [...navigationItems];
 
 const recruiterNavItems = [...navigationItems];
 
@@ -147,17 +144,14 @@ const ProfileDropdown = ({ userRole, currentUser, onLogout }) => {
 
   const recruiterLinks = [
     { name: 'Profile', href: '/profile' },
-    { name: 'Post a Job', href: '/postjob' },
+    { name: 'Post Job', href: '/post-job' },
     { name: 'View Applications', href: '/applications' },
-    { name: 'Resume Builder', href: '/resume-builder' },
     { name: 'View Internship Applications', href: '/internship-applications' },
     { name: 'Post Internship', href: '/post-internship' },
     { name: 'Become a Freelancer', href: '/seller-info' },
     { name: 'Orders', href: '/orders' },
     { name: 'Question Bank', href: '/assessment/question-bank' },
-    { name: 'Create Assessment', href: '/assessment/create' },
-    { name: 'My Assessments', href: '/assessments' },
-    { name: 'Assign Assessments', href: '/assessment/assign' }
+    { name: 'Create Assessment', href: '/assessment/create' }
   ];
 
   const candidateLinks = [

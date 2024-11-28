@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, where, doc, getDoc, getDocs, addDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, doc, getDoc, getDocs, addDoc, onSnapshot, deleteDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../../firebase';
 import { useAuth } from '../AuthContext';
 import { useSearchParams, useNavigate } from 'react-router-dom';
@@ -114,55 +114,49 @@ const AssignAssessment = () => {
   }, [candidateId]);
 
   const handleAssignAssessment = async (assessmentId) => {
-    if (!currentUser) {
-      setError('You must be logged in to assign assessments');
-      return;
-    }
-
-    if (!candidateId) {
-      setError('No candidate selected');
+    if (!candidateId || !assessmentId) {
+      setError('Missing required information');
       return;
     }
 
     try {
-      // Check if assessment is already assigned
-      const assignmentRef = collection(db, 'assessmentAssignments');
-      const existingAssignmentQuery = query(
-        assignmentRef,
-        where('assessmentId', '==', assessmentId),
-        where('candidateId', '==', candidateId)
-      );
-      
-      const existingAssignments = await getDocs(existingAssignmentQuery);
-      if (!existingAssignments.empty) {
-        setError('This assessment has already been assigned to this candidate');
-        return;
-      }
+      setLoading(true);
 
-      // Get assessment details
-      const assessmentDoc = await getDoc(doc(db, 'assessments', assessmentId));
-      if (!assessmentDoc.exists()) {
-        setError('Assessment not found');
-        return;
-      }
-
-      // Create new assignment
-      await addDoc(assignmentRef, {
+      // Create assessment assignment
+      const assignmentData = {
         assessmentId,
-        candidateId: candidateId,
-        candidateName: candidate?.displayName || 'Anonymous User',
-        candidateEmail: candidate?.email,
+        candidateId,
         assignedBy: currentUser.uid,
-        assignedAt: new Date(),
+        assignedAt: serverTimestamp(),
         completed: false,
         score: null,
-        passed: null
-      });
+        passingScore: null,
+        status: 'assigned'
+      };
+
+      const assignmentRef = await addDoc(collection(db, 'assessmentAssignments'), assignmentData);
+
+      // Update application with assessment ID
+      const applicationsRef = collection(db, 'applications');
+      const q = query(applicationsRef, where('candidateId', '==', candidateId));
+      const querySnapshot = await getDocs(q);
+
+      if (!querySnapshot.empty) {
+        const applicationDoc = querySnapshot.docs[0];
+        await updateDoc(doc(db, 'applications', applicationDoc.id), {
+          assessmentId: assessmentId,
+          assessmentStatus: 'assigned',
+          updatedAt: serverTimestamp()
+        });
+      }
 
       alert('Assessment assigned successfully!');
-    } catch (err) {
-      console.error('Error assigning assessment:', err);
+      navigate(-1);
+    } catch (error) {
+      console.error('Error assigning assessment:', error);
       setError('Failed to assign assessment. Please try again.');
+    } finally {
+      setLoading(false);
     }
   };
 
