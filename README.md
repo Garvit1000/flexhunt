@@ -1,1 +1,2 @@
-flexhunt  jobs and freelance internships at one place
+flexhunt  jobs and freelance,internships at one place
+payment gateway for purchasing gigs
